@@ -1,0 +1,42 @@
+{
+  "name": "smart-grain-storage-iot",
+  "version": "1.0.0",
+  "description": "Smart Grain Storage Monitoring & Preservation System (IoT Kho Ngũ Cốc)",
+  "main": "backend/src/server.ts",
+  "scripts": {
+    "db:generate": "prisma generate --schema=database/schema.prisma",
+    "db:push": "prisma db push --schema=database/schema.prisma",
+    "db:migrate": "prisma migrate dev --schema=database/schema.prisma",
+    "db:seed": "tsx database/seed.ts",
+    "docker:up": "docker compose -f deployment/docker-compose.yml up -d",
+    "docker:down": "docker compose -f deployment/docker-compose.yml down"
+  },
+  "prisma": {
+    "schema": "database/schema.prisma",
+    "seed": "tsx database/seed.ts"
+  },
+  "keywords": [
+    "iot",
+    "esp32",
+    "mqtt",
+    "grain-storage",
+    "rule-engine",
+    "prisma",
+    "postgres"
+  ],
+  "author": "IoT Team",
+  "license": "MIT",
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.7"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^22.10.2",
+    "prisma": "^5.22.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
+

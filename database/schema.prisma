@@ -1,0 +1,191 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -----------------------------------------------------------------------------
+// ENUMS
+// -----------------------------------------------------------------------------
+
+enum Role {
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+enum UserStatus {
+  ACTIVE
+  LOCKED
+}
+
+enum LifecycleState {
+  REGISTERED
+  PROVISIONED
+  ACTIVE
+  OFFLINE
+  FAULT
+  MAINTENANCE
+  SUSPENDED
+  DECOMMISSIONED
+}
+
+enum RiskLevel {
+  SAFE
+  WARNING
+  HIGH_RISK
+}
+
+enum AlertType {
+  HIGH_HUMIDITY
+  HIGH_TEMP
+  GAS_SPIKE
+  DEVICE_OFFLINE
+}
+
+enum AlertSeverity {
+  WARNING
+  CRITICAL
+}
+
+enum AlertStatus {
+  NEW
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum CommandStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  TIMEOUT
+}
+
+// -----------------------------------------------------------------------------
+// MODELS (7 TABLES)
+// -----------------------------------------------------------------------------
+
+model User {
+  id               String          @id @default(uuid())
+  email            String          @unique
+  password_hash    String
+  full_name        String
+  role             Role            @default(OPERATOR)
+  status           UserStatus      @default(ACTIVE)
+  telegram_chat_id String?
+  created_at       DateTime        @default(now())
+  managed_zones    WarehouseZone[]
+  alerts_acked     Alert[]         @relation("AlertAckBy")
+  commands_issued  DeviceCommand[]
+  audit_logs       AuditLog[]
+
+  @@map("users")
+}
+
+model WarehouseZone {
+  id          String    @id @default(uuid())
+  name        String
+  grain_type  String    @default("Thóc tẻ - TCVN 8370")
+  target_mc   Float     @default(14.0)
+  max_rh      Float     @default(65.0)
+  manager_id  String
+  manager     User      @relation(fields: [manager_id], references: [id])
+  devices     Device[]
+  alerts      Alert[]
+  created_at  DateTime  @default(now())
+
+  @@map("warehouse_zones")
+}
+
+model Device {
+  id                String          @id @default(uuid())
+  device_code       String          @unique
+  name              String
+  secret_token_hash String
+  zone_id           String
+  zone              WarehouseZone   @relation(fields: [zone_id], references: [id])
+  lifecycle_state   LifecycleState  @default(REGISTERED)
+  is_online         Boolean         @default(false)
+  fw_version        String          @default("1.0.0")
+  hw_version        String          @default("ESP32-v1")
+  config_json       Json            @default("{}")
+  last_seen_at      DateTime?
+  telemetry_logs    TelemetryLog[]
+  alerts            Alert[]
+  commands          DeviceCommand[]
+  created_at        DateTime        @default(now())
+
+  @@map("devices")
+}
+
+model TelemetryLog {
+  id            BigInt    @id @default(autoincrement())
+  device_id     String
+  device        Device    @relation(fields: [device_id], references: [id])
+  msg_id        String    @unique
+  temperature   Float
+  humidity_air  Float
+  gas_ppm       Float
+  estimated_emc Float
+  fan_state     Boolean   @default(false)
+  risk_level    RiskLevel @default(SAFE)
+  recorded_at   DateTime  @default(now())
+
+  @@index([device_id, recorded_at])
+  @@map("telemetry_logs")
+}
+
+model Alert {
+  id            String        @id @default(uuid())
+  device_id     String
+  device        Device        @relation(fields: [device_id], references: [id])
+  zone_id       String
+  zone          WarehouseZone @relation(fields: [zone_id], references: [id])
+  alert_type    AlertType
+  severity      AlertSeverity
+  message       String
+  trigger_value Float
+  status        AlertStatus   @default(NEW)
+  ack_by_id     String?
+  ack_by        User?         @relation("AlertAckBy", fields: [ack_by_id], references: [id])
+  ack_note      String?
+  created_at    DateTime      @default(now())
+  resolved_at   DateTime?
+
+  @@map("alerts")
+}
+
+model DeviceCommand {
+  id           String        @id @default(uuid())
+  cmd_id       String        @unique
+  device_id    String
+  device       Device        @relation(fields: [device_id], references: [id])
+  issued_by_id String
+  issued_by    User          @relation(fields: [issued_by_id], references: [id])
+  command_type String
+  payload_json Json
+  status       CommandStatus @default(PENDING)
+  retry_count  Int           @default(0)
+  created_at   DateTime      @default(now())
+  executed_at  DateTime?
+
+  @@map("device_commands")
+}
+
+model AuditLog {
+  id           BigInt   @id @default(autoincrement())
+  actor_id     String?
+  actor        User?    @relation(fields: [actor_id], references: [id])
+  action       String
+  target_type  String
+  target_id    String
+  ip_address   String?
+  details_json Json?
+  created_at   DateTime @default(now())
+
+  @@map("audit_logs")
+}
+
