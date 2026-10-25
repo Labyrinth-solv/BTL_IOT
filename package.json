@@ -4,6 +4,10 @@
   "description": "Smart Grain Storage Monitoring & Preservation System (IoT Kho Ngũ Cốc)",
   "main": "backend/src/server.ts",
   "scripts": {
+    "dev": "tsx watch backend/src/server.ts",
+    "start": "tsx backend/src/server.ts",
+    "backend:dev": "tsx watch backend/src/server.ts",
+    "build": "tsc",
     "db:generate": "prisma generate --schema=database/schema.prisma",
     "db:push": "prisma db push --schema=database/schema.prisma",
     "db:migrate": "prisma migrate dev --schema=database/schema.prisma",
@@ -29,14 +33,21 @@
   "dependencies": {
     "@prisma/client": "^5.22.0",
     "bcryptjs": "^2.4.3",
-    "dotenv": "^16.4.7"
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.7",
+    "express": "^5.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "mqtt": "^5.16.1",
+    "socket.io": "^4.8.4"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.10.2",
     "prisma": "^5.22.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
 }
-
