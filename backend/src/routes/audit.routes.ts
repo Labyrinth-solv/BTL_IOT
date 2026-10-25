@@ -12,3 +12,4 @@ router.use(authenticateJWT, requireRoles(Role.ADMIN));
 router.get('/', AuditController.getAll);
 
 export default router;
+

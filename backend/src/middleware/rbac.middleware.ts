@@ -69,8 +69,10 @@ export const checkDeviceOrZoneAccess = async (
     let targetZoneId = zoneId;
 
     if (!targetZoneId && deviceId) {
-      const device = await prisma.device.findUnique({
-        where: { id: deviceId },
+      const device = await prisma.device.findFirst({
+        where: {
+          OR: [{ id: deviceId }, { device_code: deviceId }],
+        },
         select: { zone_id: true },
       });
       if (device) {

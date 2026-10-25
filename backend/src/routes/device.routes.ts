@@ -62,4 +62,13 @@ router.post(
   DeviceController.controlActuator
 );
 
+// Alias cho kịch bản kiểm thử bảo mật SEC-01 trong Tài liệu đặc tả (POST /api/devices/:id/commands)
+router.post(
+  '/:id/commands',
+  requireRoles(Role.ADMIN, Role.OPERATOR),
+  checkDeviceOrZoneAccess,
+  DeviceController.controlActuator
+);
+
 export default router;
+

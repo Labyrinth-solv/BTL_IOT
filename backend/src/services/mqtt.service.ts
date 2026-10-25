@@ -65,6 +65,9 @@ export class MQTTService {
     this.client.on('reconnect', () => {
       console.log('[MQTTService] Đang thử kết nối lại MQTT Broker...');
     });
+
+    // Khởi động trình giám sát Heartbeat ngầm (Mục 4.3 Bước 6)
+    this.startHeartbeatMonitor();
   }
 
   /**
@@ -145,10 +148,28 @@ export class MQTTService {
       return;
     }
 
-    // D. Trích xuất chỉ số & Tính toán độ ẩm cân bằng ước tính (EMC)
+    // D. Trích xuất chỉ số & Kiểm tra giới hạn vật lý cảm biến (SEC-04 Input Validator)
     const temp = metrics.temperature?.value ?? 25.0;
     const rh = metrics.humidity_air?.value ?? 60.0;
     const gas = metrics.gas_ppm?.value ?? 400.0;
+
+    // SEC-04: Từ chối gói tin nằm ngoài dải đo vật lý của SHT31 (-40 đến +125°C, 0-100% RH) và MQ-135 (>= 0)
+    if (temp < -40.0 || temp > 125.0 || rh < 0.0 || rh > 100.0 || gas < 0.0 || gas > 10000.0) {
+      console.warn(`🛡️ [SEC-04] Từ chối telemetry dị thường ngoài giới hạn vật lý từ ${deviceCode}: Temp=${temp}, RH=${rh}, Gas=${gas}`);
+      await AuditService.log({
+        action: 'INVALID_SENSOR_DATA_REJECTED',
+        target_type: 'DEVICE',
+        target_id: device.id,
+        details_json: {
+          device_code: deviceCode,
+          msg_id,
+          metrics,
+          reason: 'Giá trị cảm biến nằm ngoài dải đo vật lý của cảm biến SHT31 / MQ-135',
+        },
+      });
+      return;
+    }
+
     const estimatedEmc = metrics.estimated_emc?.value ?? EMCService.calculate(temp, rh);
 
     // E. Đánh giá qua Rule Engine
@@ -340,6 +361,36 @@ export class MQTTService {
         hw_version: hw_version || device.hw_version,
         last_seen_at: new Date().toISOString(),
       });
+    } else if (state === 'FAULT') {
+      console.warn(`⚠️ [MQTTService] Thiết bị báo lỗi cảm biến/phần cứng (FAULT): ${deviceCode} - ${reason || 'Lỗi I2C SHT31'}`);
+      await prisma.device.update({
+        where: { id: device.id },
+        data: { lifecycle_state: LifecycleState.FAULT },
+      });
+
+      const faultAlert = await prisma.alert.create({
+        data: {
+          device_id: device.id,
+          zone_id: device.zone_id,
+          alert_type: AlertType.DEVICE_OFFLINE,
+          severity: AlertSeverity.CRITICAL,
+          message: `Thiết bị ${deviceCode} gặp sự cố phần cứng (FAULT): ${reason || 'Lỗi cảm biến I2C/SHT31'}`,
+          trigger_value: 0,
+        },
+        include: {
+          device: { select: { device_code: true, name: true } },
+          zone: { select: { name: true } },
+        },
+      });
+
+      SocketService.emitNewAlert(faultAlert);
+      SocketService.emitDeviceStatus({
+        device_id: deviceCode,
+        device_db_id: device.id,
+        state: 'FAULT',
+        lifecycle_state: LifecycleState.FAULT,
+        reason: reason || 'Lỗi cảm biến',
+      });
     }
   }
 
@@ -480,4 +531,61 @@ export class MQTTService {
 
     this.pendingCommandTimers.set(cmdId, timer);
   }
+
+  /**
+   * 5. ĐỊNH KỲ QUÉT PHÁT HIỆN MẤT HEARTBEAT (Mục 4.3 Bước 6)
+   * Tự động chuyển thiết bị sang OFFLINE nếu quá 45 giây không nhận được tin nhắn
+   */
+  private static startHeartbeatMonitor(): void {
+    setInterval(async () => {
+      try {
+        const timeoutLimit = new Date(Date.now() - 45 * 1000); // 45 giây trước
+
+        const staleDevices = await prisma.device.findMany({
+          where: {
+            is_online: true,
+            lifecycle_state: LifecycleState.ACTIVE,
+            last_seen_at: { lt: timeoutLimit },
+          },
+          include: { zone: true },
+        });
+
+        for (const dev of staleDevices) {
+          console.warn(`⚠️ [MQTTService] Thiết bị ${dev.device_code} quá 45s không có tín hiệu -> Chuyển OFFLINE`);
+
+          await prisma.device.update({
+            where: { id: dev.id },
+            data: { is_online: false, lifecycle_state: LifecycleState.OFFLINE },
+          });
+
+          const offlineAlert = await prisma.alert.create({
+            data: {
+              device_id: dev.id,
+              zone_id: dev.zone_id,
+              alert_type: AlertType.DEVICE_OFFLINE,
+              severity: AlertSeverity.WARNING,
+              message: `Thiết bị ${dev.device_code} không gửi Heartbeat quá 45 giây (OFFLINE)`,
+              trigger_value: 0,
+            },
+            include: {
+              device: { select: { device_code: true, name: true } },
+              zone: { select: { name: true } },
+            },
+          });
+
+          SocketService.emitNewAlert(offlineAlert);
+          SocketService.emitDeviceStatus({
+            device_id: dev.device_code,
+            device_db_id: dev.id,
+            state: 'OFFLINE',
+            is_online: false,
+            lifecycle_state: LifecycleState.OFFLINE,
+          });
+        }
+      } catch (err) {
+        console.error('[MQTTService] Lỗi quét Heartbeat Timeout:', err);
+      }
+    }, 15000); // Quét mỗi 15 giây
+  }
 }
+

@@ -14,3 +14,4 @@ router.post('/', UserController.create);
 router.put('/:id/status', UserController.updateStatus);
 
 export default router;
+

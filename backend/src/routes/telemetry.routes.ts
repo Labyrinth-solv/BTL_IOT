@@ -12,3 +12,4 @@ router.get('/:deviceId/history', checkDeviceOrZoneAccess, TelemetryController.ge
 router.get('/:deviceId/export', checkDeviceOrZoneAccess, TelemetryController.exportCSV);
 
 export default router;
+

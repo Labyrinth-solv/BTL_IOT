@@ -17,3 +17,4 @@ export const errorHandler = (
     error: process.env.NODE_ENV === 'development' ? err.stack : undefined,
   });
 };
+

@@ -8,3 +8,4 @@ router.post('/login', AuthController.login);
 router.get('/me', authenticateJWT, AuthController.getCurrentUser);
 
 export default router;
+

@@ -9,3 +9,4 @@ router.use(authenticateJWT);
 router.get('/dashboard', StatsController.getDashboardKPI);
 
 export default router;
+

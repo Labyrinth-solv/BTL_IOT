@@ -14,3 +14,4 @@ router.post('/', requireRoles(Role.ADMIN), ZoneController.create);
 router.put('/:id', requireRoles(Role.ADMIN, Role.OPERATOR), ZoneController.update);
 
 export default router;
+

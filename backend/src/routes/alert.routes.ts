@@ -18,3 +18,4 @@ router.post('/:id/ack', requireRoles(Role.ADMIN, Role.OPERATOR), AlertController
 router.post('/:id/resolve', requireRoles(Role.ADMIN, Role.OPERATOR), AlertController.resolve);
 
 export default router;
+

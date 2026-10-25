@@ -46,8 +46,10 @@ export class DeviceController {
     try {
       const id = req.params.id as string;
 
-      const device = await prisma.device.findUnique({
-        where: { id },
+      const device = await prisma.device.findFirst({
+        where: {
+          OR: [{ id }, { device_code: id }],
+        },
         include: {
           zone: true,
           telemetry_logs: {
@@ -327,7 +329,9 @@ export class DeviceController {
       const id = req.params.id as string;
       const configPayload = req.body;
 
-      const device = await prisma.device.findUnique({ where: { id } });
+      const device = await prisma.device.findFirst({
+        where: { OR: [{ id }, { device_code: id }] },
+      });
       if (!device) {
         res.status(404).json({ success: false, message: 'Không tìm thấy thiết bị' });
         return;
@@ -377,14 +381,30 @@ export class DeviceController {
   static async controlActuator(req: Request, res: Response): Promise<void> {
     try {
       const id = req.params.id as string;
-      const { target, action, control_mode, duration_sec } = req.body;
+      const { target, action, control_mode, duration_sec, command } = req.body;
 
-      if (!target || !action) {
-        res.status(400).json({ success: false, message: 'Thiếu tham số target hoặc action' });
+      // Hỗ trợ cả 2 dạng body: { target, action } hoặc { command: "TURN_ON_FAN" }
+      let resolvedTarget = target || 'VENTILATION_FAN';
+      let resolvedAction = action;
+
+      if (!resolvedAction && command) {
+        if (command === 'TURN_ON_FAN' || command === 'FAN_ON') {
+          resolvedTarget = 'VENTILATION_FAN';
+          resolvedAction = 'TURN_ON';
+        } else if (command === 'TURN_OFF_FAN' || command === 'FAN_OFF') {
+          resolvedTarget = 'VENTILATION_FAN';
+          resolvedAction = 'TURN_OFF';
+        }
+      }
+
+      if (!resolvedAction) {
+        res.status(400).json({ success: false, message: 'Thiếu tham số action hoặc command' });
         return;
       }
 
-      const device = await prisma.device.findUnique({ where: { id } });
+      const device = await prisma.device.findFirst({
+        where: { OR: [{ id }, { device_code: id }] },
+      });
       if (!device) {
         res.status(404).json({ success: false, message: 'Không tìm thấy thiết bị' });
         return;
@@ -396,8 +416,8 @@ export class DeviceController {
         device.device_code,
         'ACTUATOR_CONTROL',
         {
-          target: target || 'VENTILATION_FAN',
-          action: action, // TURN_ON hoặc TURN_OFF
+          target: resolvedTarget,
+          action: resolvedAction, // TURN_ON hoặc TURN_OFF
           control_mode: control_mode || 'MANUAL',
           duration_sec: duration_sec || 600,
         },
@@ -409,12 +429,12 @@ export class DeviceController {
         action: 'ACTUATOR_CONTROL_COMMAND',
         target_type: 'DEVICE',
         target_id: device.id,
-        details_json: { cmd_id: cmdId, target, action, control_mode },
+        details_json: { cmd_id: cmdId, target: resolvedTarget, action: resolvedAction, control_mode },
       });
 
       res.status(200).json({
         success: true,
-        message: `Đã phát lệnh điều khiển ${target}: ${action} (Chờ phản hồi ACK)`,
+        message: `Đã phát lệnh điều khiển ${resolvedTarget}: ${resolvedAction} (Chờ phản hồi ACK)`,
         data: { cmd_id: cmdId, status: 'PENDING' },
       });
     } catch (error) {
