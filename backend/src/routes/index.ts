@@ -7,6 +7,7 @@ import zoneRoutes from './zone.routes';
 import userRoutes from './user.routes';
 import auditRoutes from './audit.routes';
 import statsRoutes from './stats.routes';
+import simulatorRoutes from './simulator.routes';
 
 const router = Router();
 
@@ -18,6 +19,7 @@ router.use('/zones', zoneRoutes);
 router.use('/users', userRoutes);
 router.use('/audit-logs', auditRoutes);
 router.use('/stats', statsRoutes);
+router.use('/simulator', simulatorRoutes);
 
 // Health check endpoint
 router.get('/health', (req, res) => {
