@@ -12,16 +12,8 @@ export class DeviceController {
    */
   static async getAll(req: Request, res: Response): Promise<void> {
     try {
-      const user = req.user!;
-      const whereCondition: any = {};
-
-      // Phân quyền: OPERATOR lọc theo kho quản lý (nếu có); ADMIN và VIEWER xem toàn bộ kho
-      if (user.role === Role.OPERATOR && user.managed_zones && user.managed_zones.length > 0) {
-        whereCondition.zone_id = { in: user.managed_zones };
-      }
-
+      // Mode demo: Trả về toàn bộ thiết bị trong hệ thống
       const devices = await prisma.device.findMany({
-        where: whereCondition,
         include: {
           zone: { select: { id: true, name: true, grain_type: true } },
           telemetry_logs: {

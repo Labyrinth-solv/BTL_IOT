@@ -110,15 +110,13 @@ export const ZonesPage: React.FC = () => {
             <span>Làm mới</span>
           </button>
 
-          {!isViewer && (
-            <button
-              onClick={() => setIsModalOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition"
-            >
-              <Plus className="w-4 h-4 stroke-[2.5]" />
-              <span>Thêm Khu Vực Silo</span>
-            </button>
-          )}
+          <button
+            onClick={() => setIsModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition"
+          >
+            <Plus className="w-4 h-4 stroke-[2.5]" />
+            <span>Thêm Khu Vực Silo</span>
+          </button>
         </div>
       </div>
 

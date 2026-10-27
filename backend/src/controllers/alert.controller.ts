@@ -20,11 +20,7 @@ export class AlertController {
       if (device_id) where.device_id = device_id as string;
       if (zone_id) where.zone_id = zone_id as string;
 
-      // Phân quyền: OPERATOR lọc theo kho quản lý; ADMIN và VIEWER xem toàn bộ kho
-      if (user.role === Role.OPERATOR && user.managed_zones && user.managed_zones.length > 0) {
-        where.zone_id = { in: user.managed_zones };
-      }
-
+      // Mode demo: Không giới hạn cảnh báo theo tài khoản
       const alerts = await prisma.alert.findMany({
         where,
         include: {

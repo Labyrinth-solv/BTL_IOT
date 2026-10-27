@@ -212,15 +212,13 @@ export const DevicesPage: React.FC = () => {
             <span>Làm mới</span>
           </button>
 
-          {!isViewer && (
-            <button
-              onClick={() => setIsOnboardModalOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition"
-            >
-              <Plus className="w-4 h-4 stroke-[2.5]" />
-              <span>Onboard Thiết bị Mới</span>
-            </button>
-          )}
+          <button
+            onClick={() => setIsOnboardModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition"
+          >
+            <Plus className="w-4 h-4 stroke-[2.5]" />
+            <span>Onboard Thiết bị Mới</span>
+          </button>
         </div>
       </div>
 
@@ -343,7 +341,7 @@ export const DevicesPage: React.FC = () => {
                             <ExternalLink className="w-3.5 h-3.5" />
                           </button>
 
-                          {!isViewer && !isDecommissioned && (
+                          {!isDecommissioned && (
                             <>
                               {/* Toggle Maintenance */}
                               <button

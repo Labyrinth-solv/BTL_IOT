@@ -45,24 +45,8 @@ export const UsersPage: React.FC = () => {
   };
 
   useEffect(() => {
-    if (isAdmin) {
-      fetchUsers();
-    }
-  }, [isAdmin]);
-
-  if (!isAdmin) {
-    return (
-      <div className="flex flex-col items-center justify-center p-12 bg-slate-900 border border-slate-800 rounded-2xl text-center space-y-4">
-        <div className="w-16 h-16 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400">
-          <ShieldAlert className="w-8 h-8" />
-        </div>
-        <h2 className="text-xl font-bold text-slate-100">Truy cập bị từ chối (403 Forbidden)</h2>
-        <p className="text-sm text-slate-400 max-w-md">
-          Chỉ tài khoản có quyền <strong>ADMIN</strong> mới có thể quản lý người dùng và cấp phát quyền tài khoản.
-        </p>
-      </div>
-    );
-  }
+    fetchUsers();
+  }, []);
 
   const handleToggleStatus = async (user: User) => {
     const newStatus: UserStatus = user.status === 'ACTIVE' ? 'LOCKED' : 'ACTIVE';

@@ -5,15 +5,9 @@ import { Role } from '@prisma/client';
 export class StatsController {
   static async getDashboardKPI(req: Request, res: Response): Promise<void> {
     try {
-      const user = req.user!;
+      // Mode demo: Tính toán tổng quan trên toàn bộ hệ thống
       const deviceWhere: any = {};
       const alertWhere: any = { status: 'NEW' };
-
-      // Phân quyền: OPERATOR lọc theo kho quản lý; ADMIN và VIEWER xem toàn bộ kho
-      if (user.role === Role.OPERATOR && user.managed_zones && user.managed_zones.length > 0) {
-        deviceWhere.zone_id = { in: user.managed_zones };
-        alertWhere.zone_id = { in: user.managed_zones };
-      }
 
       const totalDevices = await prisma.device.count({ where: deviceWhere });
       const onlineDevices = await prisma.device.count({

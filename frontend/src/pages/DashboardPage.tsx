@@ -68,20 +68,6 @@ export const DashboardPage: React.FC = () => {
   }, [latestAck]);
 
   const handleToggleFan = async (device: Device, currentFanState: boolean) => {
-    // Kịch bản Demo số 9: Thử thao tác không được cấp quyền nếu là VIEWER
-    if (isViewer) {
-      showToast('Tài khoản VIEWER không có quyền điều khiển Quạt thông gió! (403 Forbidden)', 'error');
-      try {
-        await api.controlActuator(device.id, {
-          target: 'VENTILATION_FAN',
-          action: currentFanState ? 'TURN_OFF' : 'TURN_ON',
-        });
-      } catch (err: any) {
-        showToast(err.message, 'error');
-      }
-      return;
-    }
-
     const action = currentFanState ? 'TURN_OFF' : 'TURN_ON';
     setPendingCommands((prev) => ({
       ...prev,

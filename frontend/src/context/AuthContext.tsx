@@ -38,12 +38,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const res = await api.getMe();
           if (res.success) {
             setUser(res.data);
-          } else {
-            logout();
+            setIsLoading(false);
+            return;
           }
-        } catch (e) {
-          logout();
+        } catch (e) {}
+      }
+
+      // Tự động đăng nhập sẵn tài khoản Demo để vào thẳng Dashboard
+      try {
+        const res = await api.login({ email: 'operator@grain.com', password: 'operator123' });
+        if (res.success && res.data?.token) {
+          localStorage.setItem('grain_token', res.data.token);
+          setToken(res.data.token);
+          setUser(res.data.user);
         }
+      } catch (e) {
+        setUser({
+          id: 'demo-user',
+          email: 'operator@grain.com',
+          full_name: 'Thủ Kho Vận Hành (Demo)',
+          role: 'ADMIN',
+          status: 'ACTIVE',
+        });
       }
       setIsLoading(false);
     };

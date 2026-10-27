@@ -338,44 +338,40 @@ export const AlertsPage: React.FC = () => {
                         )}
                       </td>
                       <td className="py-3.5 px-4 text-right">
-                        {!isViewer ? (
-                          <div className="flex items-center justify-end gap-1.5">
-                            {isNew && (
-                              <button
-                                onClick={() => {
-                                  setAckModalAlert(alert);
-                                  setAckNote('Đã tiếp nhận cảnh báo, đang cử nhân viên kiểm tra quạt.');
-                                }}
-                                className="px-2.5 py-1 rounded-lg bg-sky-500/20 text-sky-300 border border-sky-500/40 hover:bg-sky-500/30 font-semibold text-[11px] transition flex items-center gap-1"
-                              >
-                                <MessageSquare className="w-3 h-3" />
-                                <span>Xác nhận (ACK)</span>
-                              </button>
-                            )}
+                        <div className="flex items-center justify-end gap-1.5">
+                          {isNew && (
+                            <button
+                              onClick={() => {
+                                setAckModalAlert(alert);
+                                setAckNote('Đã tiếp nhận cảnh báo, đang cử nhân viên kiểm tra quạt.');
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-sky-500/20 text-sky-300 border border-sky-500/40 hover:bg-sky-500/30 font-semibold text-[11px] transition flex items-center gap-1"
+                            >
+                              <MessageSquare className="w-3 h-3" />
+                              <span>Xác nhận (ACK)</span>
+                            </button>
+                          )}
 
-                            {(isNew || isAck) && (
-                              <button
-                                onClick={() => {
-                                  setResolveModalAlert(alert);
-                                  setResolveNote('Đã thông gió cưỡng bức, độ ẩm và khí gas trở lại an toàn TCVN 8370.');
-                                }}
-                                className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 font-semibold text-[11px] transition flex items-center gap-1"
-                              >
-                                <CheckCircle className="w-3 h-3" />
-                                <span>Hoàn tất (Resolve)</span>
-                              </button>
-                            )}
+                          {(isNew || isAck) && (
+                            <button
+                              onClick={() => {
+                                setResolveModalAlert(alert);
+                                setResolveNote('Đã thông gió cưỡng bức, độ ẩm và khí gas trở lại an toàn TCVN 8370.');
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 font-semibold text-[11px] transition flex items-center gap-1"
+                            >
+                              <CheckCircle className="w-3 h-3" />
+                              <span>Hoàn tất (Resolve)</span>
+                            </button>
+                          )}
 
-                            {isResolved && (
-                              <span className="text-emerald-400 font-semibold text-[11px] flex items-center justify-end gap-1">
-                                <CheckCircle className="w-3.5 h-3.5" />
-                                <span>Đã đóng</span>
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-slate-600 italic text-[11px]">Chỉ xem</span>
-                        )}
+                          {isResolved && (
+                            <span className="text-emerald-400 font-semibold text-[11px] flex items-center justify-end gap-1">
+                              <CheckCircle className="w-3.5 h-3.5" />
+                              <span>Đã đóng</span>
+                            </span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );

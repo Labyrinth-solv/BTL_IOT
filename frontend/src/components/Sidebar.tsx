@@ -53,34 +53,32 @@ export const Sidebar: React.FC = () => {
           </nav>
         </div>
 
-        {isAdmin && (
-          <div>
-            <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider px-3 mb-2 flex items-center gap-1.5">
-              <span>Quản Trị Hệ Thống</span>
-              <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                ADMIN
-              </span>
-            </div>
-            <nav className="space-y-1">
-              {adminNavItems.map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  className={({ isActive }) =>
-                    `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                      isActive
-                        ? 'bg-purple-500/10 text-purple-300 font-semibold border border-purple-500/30'
-                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                    }`
-                  }
-                >
-                  <item.icon className="w-4 h-4 shrink-0" />
-                  <span>{item.label}</span>
-                </NavLink>
-              ))}
-            </nav>
+        <div>
+          <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider px-3 mb-2 flex items-center gap-1.5">
+            <span>Quản Trị Hệ Thống</span>
+            <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+              QUẢN TRỊ
+            </span>
           </div>
-        )}
+          <nav className="space-y-1">
+            {adminNavItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+                    isActive
+                      ? 'bg-purple-500/10 text-purple-300 font-semibold border border-purple-500/30'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                  }`
+                }
+              >
+                <item.icon className="w-4 h-4 shrink-0" />
+                <span>{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
+        </div>
       </div>
 
       {/* Footer Info */}

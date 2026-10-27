@@ -37,24 +37,8 @@ export const AuditLogsPage: React.FC = () => {
   };
 
   useEffect(() => {
-    if (isAdmin) {
-      fetchLogs();
-    }
-  }, [isAdmin]);
-
-  if (!isAdmin) {
-    return (
-      <div className="flex flex-col items-center justify-center p-12 bg-slate-900 border border-slate-800 rounded-2xl text-center space-y-4">
-        <div className="w-16 h-16 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400">
-          <ShieldAlert className="w-8 h-8" />
-        </div>
-        <h2 className="text-xl font-bold text-slate-100">Truy cập bị từ chối (403 Forbidden)</h2>
-        <p className="text-sm text-slate-400 max-w-md">
-          Chỉ người dùng có quyền <strong>ADMIN</strong> mới được phép xem nhật ký kiểm toán hệ thống (Audit Logs) theo chính sách bảo mật RBAC.
-        </p>
-      </div>
-    );
-  }
+    fetchLogs();
+  }, []);
 
   const getActionBadge = (action: string) => {
     if (action.includes('SECURITY') || action.includes('403') || action.includes('VIOLATION') || action.includes('SUSPEND') || action.includes('DECOMMISSION')) {
