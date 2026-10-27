@@ -9,9 +9,10 @@ export class StatsController {
       const deviceWhere: any = {};
       const alertWhere: any = { status: 'NEW' };
 
-      if (user.role !== Role.ADMIN) {
-        deviceWhere.zone_id = { in: user.managed_zones || [] };
-        alertWhere.zone_id = { in: user.managed_zones || [] };
+      // Phân quyền: OPERATOR lọc theo kho quản lý; ADMIN và VIEWER xem toàn bộ kho
+      if (user.role === Role.OPERATOR && user.managed_zones && user.managed_zones.length > 0) {
+        deviceWhere.zone_id = { in: user.managed_zones };
+        alertWhere.zone_id = { in: user.managed_zones };
       }
 
       const totalDevices = await prisma.device.count({ where: deviceWhere });

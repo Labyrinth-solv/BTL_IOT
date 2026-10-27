@@ -15,9 +15,9 @@ export class DeviceController {
       const user = req.user!;
       const whereCondition: any = {};
 
-      // Phân quyền: OPERATOR và VIEWER chỉ thấy thiết bị trong kho được gán
-      if (user.role !== Role.ADMIN) {
-        whereCondition.zone_id = { in: user.managed_zones || [] };
+      // Phân quyền: OPERATOR lọc theo kho quản lý (nếu có); ADMIN và VIEWER xem toàn bộ kho
+      if (user.role === Role.OPERATOR && user.managed_zones && user.managed_zones.length > 0) {
+        whereCondition.zone_id = { in: user.managed_zones };
       }
 
       const devices = await prisma.device.findMany({

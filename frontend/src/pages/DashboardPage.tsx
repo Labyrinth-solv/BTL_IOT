@@ -21,7 +21,7 @@ import {
 
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
-  const { isViewer, showToast } = useAuth();
+  const { isViewer, showToast, user } = useAuth();
   const { latestTelemetry, deviceStatus, latestAck } = useSocket();
 
   const [devices, setDevices] = useState<Device[]>([]);
@@ -49,7 +49,7 @@ export const DashboardPage: React.FC = () => {
     fetchData();
     const interval = setInterval(fetchData, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [user]);
 
   // Lắng nghe phản hồi ACK từ Socket để cập nhật trạng thái "Pending ACK... -> Active"
   useEffect(() => {
@@ -217,8 +217,23 @@ export const DashboardPage: React.FC = () => {
           <span>Danh Sách Silo &amp; Node Cảm Biến Thời Gian Thực</span>
         </h2>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {devices.map((device) => {
+        {devices.length === 0 ? (
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center text-slate-400">
+            <Warehouse className="w-12 h-12 mx-auto text-slate-600 mb-3" />
+            <div className="font-semibold text-slate-200 text-base">Chưa tải được danh sách Silo</div>
+            <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+              Hệ thống chưa tìm thấy thiết bị nào được gán hoặc phiên làm việc vừa thay đổi. Bấm nút dưới đây để làm mới.
+            </p>
+            <button
+              onClick={fetchData}
+              className="mt-4 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg shadow-amber-500/20 transition"
+            >
+              Tải lại danh sách thiết bị
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {devices.map((device) => {
             // Lấy telemetry mới nhất từ WebSocket nếu có, fallback vào DB
             const wsData = latestTelemetry[device.device_code];
             const wsStatus = deviceStatus[device.device_code];
@@ -333,14 +348,16 @@ export const DashboardPage: React.FC = () => {
                   {/* Fan Switch */}
                   <div className="flex items-center gap-3">
                     <button
+                      type="button"
                       onClick={() => handleToggleFan(device, fanActive)}
-                      className={`relative inline-flex h-7 w-13 items-center rounded-full transition-colors focus:outline-none ${
+                      className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors cursor-pointer focus:outline-none border border-slate-600/50 ${
                         fanActive ? 'bg-amber-500' : 'bg-slate-700'
                       }`}
+                      title={fanActive ? 'Bấm để Tắt quạt' : 'Bấm để Bật quạt'}
                     >
                       <span
-                        className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
-                          fanActive ? 'translate-x-7' : 'translate-x-1'
+                        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform ${
+                          fanActive ? 'translate-x-8' : 'translate-x-1'
                         }`}
                       />
                     </button>
@@ -377,6 +394,7 @@ export const DashboardPage: React.FC = () => {
             );
           })}
         </div>
+        )}
       </div>
     </div>
   );

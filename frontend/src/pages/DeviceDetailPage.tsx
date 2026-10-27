@@ -143,6 +143,36 @@ export const DeviceDetailPage: React.FC = () => {
     showToast('Đang tải xuống báo cáo lịch sử CSV...', 'success');
   };
 
+  const handleToggleFan = async (currentFanState: boolean) => {
+    if (!device) return;
+    if (isViewer) {
+      showToast('Tài khoản VIEWER không có quyền điều khiển Quạt thông gió! (403 Forbidden)', 'error');
+      try {
+        await api.controlActuator(device.id, {
+          target: 'VENTILATION_FAN',
+          action: currentFanState ? 'TURN_OFF' : 'TURN_ON',
+        });
+      } catch (err: any) {
+        showToast(err.message, 'error');
+      }
+      return;
+    }
+
+    const action = currentFanState ? 'TURN_OFF' : 'TURN_ON';
+    try {
+      const res = await api.controlActuator(device.id, {
+        target: 'VENTILATION_FAN',
+        action,
+        control_mode: 'MANUAL',
+      });
+      if (res.success) {
+        showToast(`Đã gửi lệnh ${action === 'TURN_ON' ? 'BẬT' : 'TẮT'} quạt thông gió. Đang chờ phản hồi ACK...`, 'warning');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Lỗi gửi lệnh điều khiển quạt', 'error');
+    }
+  };
+
   if (isLoading || !device) {
     return (
       <div className="flex items-center justify-center min-h-[400px] text-slate-400">
@@ -165,6 +195,11 @@ export const DeviceDetailPage: React.FC = () => {
   const minRH = rhs.length ? Math.min(...rhs).toFixed(1) : 0;
 
   const avgEMC = emcs.length ? (emcs.reduce((a, b) => a + b, 0) / emcs.length).toFixed(1) : 0;
+
+  const wsData = latestTelemetry[device.device_code];
+  const currentFanState = wsData
+    ? wsData.fan_state === 'ON'
+    : (telemetryHistory[telemetryHistory.length - 1]?.fan_state ?? false);
 
   // Định dạng dữ liệu cho biểu đồ Recharts
   const chartData = telemetryHistory.map((item) => ({
@@ -202,8 +237,23 @@ export const DeviceDetailPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <LifecycleBadge state={device.lifecycle_state} />
+
+          {/* Công Tắc Quạt Thông Gió Nhanh */}
+          <button
+            onClick={() => handleToggleFan(currentFanState)}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
+              currentFanState
+                ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold shadow-lg shadow-amber-500/20'
+                : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+            }`}
+            title={currentFanState ? 'Bấm để Tắt quạt thông gió' : 'Bấm để Bật quạt thông gió'}
+          >
+            <Fan className={`w-4 h-4 ${currentFanState ? 'animate-spin' : ''}`} />
+            <span>{currentFanState ? 'Quạt: BẬT (ON)' : 'Quạt: TẮT (OFF)'}</span>
+          </button>
+
           <button
             onClick={handleExportCSV}
             className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/20 transition-all"
