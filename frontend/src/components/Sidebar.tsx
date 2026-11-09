@@ -54,9 +54,9 @@ export const Sidebar: React.FC = () => {
         </div>
 
         <div>
-          <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider px-3 mb-2 flex items-center gap-1.5">
-            <span>Quản Trị Hệ Thống</span>
-            <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+          <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider px-3 mb-2 flex items-center justify-between">
+            <span className="truncate">Quản Trị Hệ Thống</span>
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 whitespace-nowrap shrink-0">
               QUẢN TRỊ
             </span>
           </div>

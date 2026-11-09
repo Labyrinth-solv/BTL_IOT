@@ -19,6 +19,8 @@ import {
   ArrowRight,
   ExternalLink,
   ShieldAlert,
+  LayoutList,
+  Table,
 } from 'lucide-react';
 
 export const DevicesPage: React.FC = () => {
@@ -30,6 +32,7 @@ export const DevicesPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [stateFilter, setStateFilter] = useState<string>('ALL');
+  const [viewMode, setViewMode] = useState<'CARD' | 'TABLE'>('CARD');
 
   // Modal Onboard
   const [isOnboardModalOpen, setIsOnboardModalOpen] = useState(false);
@@ -235,91 +238,119 @@ export const DevicesPage: React.FC = () => {
           />
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400 whitespace-nowrap">Trạng thái:</span>
-          <select
-            value={stateFilter}
-            onChange={(e) => setStateFilter(e.target.value)}
-            className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
-          >
-            <option value="ALL">Tất cả ({devices.length})</option>
-            <option value="ACTIVE">ACTIVE</option>
-            <option value="PROVISIONED">PROVISIONED</option>
-            <option value="MAINTENANCE">MAINTENANCE</option>
-            <option value="SUSPENDED">SUSPENDED</option>
-            <option value="DECOMMISSIONED">DECOMMISSIONED</option>
-            <option value="FAULT">FAULT</option>
-          </select>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-400 whitespace-nowrap">Trạng thái:</span>
+            <select
+              value={stateFilter}
+              onChange={(e) => setStateFilter(e.target.value)}
+              className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
+            >
+              <option value="ALL">Tất cả ({devices.length})</option>
+              <option value="ACTIVE">ACTIVE</option>
+              <option value="PROVISIONED">PROVISIONED</option>
+              <option value="MAINTENANCE">MAINTENANCE</option>
+              <option value="SUSPENDED">SUSPENDED</option>
+              <option value="DECOMMISSIONED">DECOMMISSIONED</option>
+              <option value="FAULT">FAULT</option>
+            </select>
+          </div>
+
+          {/* Toggle View Mode: Thẻ Co Giãn vs Bảng */}
+          <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+            <button
+              type="button"
+              onClick={() => setViewMode('CARD')}
+              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+                viewMode === 'CARD'
+                  ? 'bg-amber-500 text-slate-950 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Chế độ Thẻ co giãn (Tự động xuống hàng, không bị tràn ngang)"
+            >
+              <LayoutList className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Dạng thẻ co giãn</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('TABLE')}
+              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+                viewMode === 'TABLE'
+                  ? 'bg-amber-500 text-slate-950 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Chế độ Bảng truyền thống"
+            >
+              <Table className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Dạng bảng</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Devices Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 uppercase font-semibold tracking-wider">
-                <th className="py-3.5 px-4">Mã Thiết bị</th>
-                <th className="py-3.5 px-4">Tên Silo</th>
-                <th className="py-3.5 px-4">Khu vực Lưu trữ</th>
-                <th className="py-3.5 px-4">Trạng thái Vòng đời</th>
-                <th className="py-3.5 px-4">Kết nối MQTT</th>
-                <th className="py-3.5 px-4">Firmware / Hardware</th>
-                <th className="py-3.5 px-4">Gói tin gần nhất</th>
-                <th className="py-3.5 px-4 text-right">Thao tác</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800 text-slate-200">
-              {filteredDevices.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="py-8 text-center text-slate-400">
-                    Không tìm thấy thiết bị nào phù hợp.
-                  </td>
-                </tr>
-              ) : (
-                filteredDevices.map((dev) => {
-                  const isSuspended = dev.lifecycle_state === 'SUSPENDED';
-                  const isDecommissioned = dev.lifecycle_state === 'DECOMMISSIONED';
-                  const isMaintenance = dev.lifecycle_state === 'MAINTENANCE';
+      {/* CHẾ ĐỘ 1: DẠNG THẺ CO GIÃN (CARD STREAM - KHÔNG TRÀN NGANG) */}
+      {viewMode === 'CARD' ? (
+        <div className="space-y-3">
+          {filteredDevices.length === 0 ? (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-400">
+              Không tìm thấy thiết bị nào phù hợp.
+            </div>
+          ) : (
+            filteredDevices.map((dev) => {
+              const isSuspended = dev.lifecycle_state === 'SUSPENDED';
+              const isDecommissioned = dev.lifecycle_state === 'DECOMMISSIONED';
+              const isMaintenance = dev.lifecycle_state === 'MAINTENANCE';
 
-                  return (
-                    <tr
-                      key={dev.id}
-                      className="hover:bg-slate-800/40 transition-colors group cursor-pointer"
-                      onClick={() => navigate(`/devices/${dev.id}`)}
-                    >
-                      <td className="py-3.5 px-4 font-mono font-bold text-amber-400">
+              return (
+                <div
+                  key={dev.id}
+                  className="bg-slate-900 border border-slate-800 hover:border-slate-700/80 rounded-2xl p-4 shadow-md transition space-y-3"
+                >
+                  {/* Hàng 1: Mã thiết bị, Tên, Vòng đời, Online/Offline */}
+                  <div className="flex flex-wrap items-center justify-between gap-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono font-bold text-amber-400 text-sm">
                         {dev.device_code}
-                      </td>
-                      <td className="py-3.5 px-4 font-medium text-slate-100">
+                      </span>
+                      <span className="font-semibold text-slate-100 text-sm">
                         {dev.name}
-                      </td>
-                      <td className="py-3.5 px-4 text-slate-300">
+                      </span>
+                      <LifecycleBadge state={dev.lifecycle_state} />
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className={`w-2 h-2 rounded-full ${
+                          dev.is_online ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'
+                        }`}
+                      />
+                      <span
+                        className={`text-xs font-semibold ${
+                          dev.is_online ? 'text-emerald-400' : 'text-rose-400'
+                        }`}
+                      >
+                        {dev.is_online ? 'ONLINE' : 'OFFLINE'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Hàng 2: Thông tin vị trí kho, phần cứng, gói tin cuối */}
+                  <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5 text-xs text-slate-400 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/60">
+                    <div>
+                      <span className="text-slate-500">Khu vực: </span>
+                      <span className="text-slate-200 font-medium">
                         {dev.zone?.name || 'Chưa gán'}
-                      </td>
-                      <td className="py-3.5 px-4">
-                        <LifecycleBadge state={dev.lifecycle_state} />
-                      </td>
-                      <td className="py-3.5 px-4">
-                        <div className="flex items-center gap-1.5">
-                          <span
-                            className={`w-2 h-2 rounded-full ${
-                              dev.is_online ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'
-                            }`}
-                          />
-                          <span
-                            className={`font-semibold ${
-                              dev.is_online ? 'text-emerald-400' : 'text-rose-400'
-                            }`}
-                          >
-                            {dev.is_online ? 'ONLINE' : 'OFFLINE'}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="py-3.5 px-4 text-slate-400 font-mono text-[11px]">
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Phần cứng: </span>
+                      <span className="font-mono text-slate-300">
                         v{dev.fw_version} | {dev.hw_version}
-                      </td>
-                      <td className="py-3.5 px-4 text-slate-400 text-[11px]">
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Gói tin gần nhất: </span>
+                      <span className="text-slate-300">
                         {dev.last_seen_at
                           ? new Date(dev.last_seen_at).toLocaleTimeString('vi-VN', {
                               hour: '2-digit',
@@ -327,74 +358,208 @@ export const DevicesPage: React.FC = () => {
                               second: '2-digit',
                             })
                           : 'Chưa có dữ liệu'}
-                      </td>
-                      <td
-                        className="py-3.5 px-4 text-right"
-                        onClick={(e) => e.stopPropagation()} // Không trigger click cả hàng
-                      >
-                        <div className="flex items-center justify-end gap-1.5">
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Hàng 3: Nút Thao tác (Tự động xuống hàng nếu màn hình hẹp) */}
+                  <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+                    <button
+                      onClick={() => navigate(`/devices/${dev.id}`)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition shadow-sm"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Xem chi tiết vi khí hậu &amp; Điều khiển</span>
+                    </button>
+
+                    {!isDecommissioned && (
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          onClick={() => handleToggleMaintenance(dev)}
+                          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition ${
+                            isMaintenance
+                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
+                              : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
+                          }`}
+                        >
+                          <Wrench className="w-3.5 h-3.5" />
+                          <span>{isMaintenance ? 'Tắt bảo trì' : 'Bật bảo trì'}</span>
+                        </button>
+
+                        {isSuspended ? (
                           <button
-                            onClick={() => navigate(`/devices/${dev.id}`)}
-                            title="Xem chi tiết vi khí hậu & điều khiển"
-                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
+                            onClick={() => handleUnsuspend(dev)}
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 text-xs font-semibold transition"
                           >
-                            <ExternalLink className="w-3.5 h-3.5" />
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Mở đình chỉ</span>
                           </button>
+                        ) : (
+                          <button
+                            onClick={() => setSuspendModalDevice(dev)}
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 text-xs font-semibold transition"
+                          >
+                            <Ban className="w-3.5 h-3.5" />
+                            <span>Đình chỉ</span>
+                          </button>
+                        )}
 
-                          {!isDecommissioned && (
-                            <>
-                              {/* Toggle Maintenance */}
-                              <button
-                                onClick={() => handleToggleMaintenance(dev)}
-                                title={isMaintenance ? 'Tắt chế độ bảo trì' : 'Bật chế độ bảo trì'}
-                                className={`p-1.5 rounded-lg border transition ${
-                                  isMaintenance
-                                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
-                                    : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
-                                }`}
-                              >
-                                <Wrench className="w-3.5 h-3.5" />
-                              </button>
-
-                              {/* Suspend / Unsuspend */}
-                              {isSuspended ? (
-                                <button
-                                  onClick={() => handleUnsuspend(dev)}
-                                  title="Mở đình chỉ thiết bị"
-                                  className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 transition"
-                                >
-                                  <RotateCcw className="w-3.5 h-3.5" />
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() => setSuspendModalDevice(dev)}
-                                  title="Đình chỉ (Suspend) do vi phạm bảo mật hoặc nghi ngờ can thiệp"
-                                  className="p-1.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition"
-                                >
-                                  <Ban className="w-3.5 h-3.5" />
-                                </button>
-                              )}
-
-                              {/* Decommission */}
-                              <button
-                                onClick={() => handleDecommission(dev)}
-                                title="Thu hồi vĩnh viễn (Decommission)"
-                                className="p-1.5 rounded-lg bg-red-950/40 text-red-400 border border-red-900/60 hover:bg-red-900/80 hover:text-white transition"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                        <button
+                          onClick={() => handleDecommission(dev)}
+                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-950/40 text-red-400 border border-red-900/60 hover:bg-red-900/80 hover:text-white text-xs font-semibold transition"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Thu hồi</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
-      </div>
+      ) : (
+        /* CHẾ ĐỘ 2: DẠNG BẢNG TRUYỀN THỐNG */
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 uppercase font-semibold tracking-wider">
+                  <th className="py-3.5 px-4">Mã Thiết bị</th>
+                  <th className="py-3.5 px-4">Tên Silo</th>
+                  <th className="py-3.5 px-4">Khu vực Lưu trữ</th>
+                  <th className="py-3.5 px-4">Trạng thái Vòng đời</th>
+                  <th className="py-3.5 px-4">Kết nối MQTT</th>
+                  <th className="py-3.5 px-4">Firmware / Hardware</th>
+                  <th className="py-3.5 px-4">Gói tin gần nhất</th>
+                  <th className="py-3.5 px-4 text-right">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800 text-slate-200">
+                {filteredDevices.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="py-8 text-center text-slate-400">
+                      Không tìm thấy thiết bị nào phù hợp.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredDevices.map((dev) => {
+                    const isSuspended = dev.lifecycle_state === 'SUSPENDED';
+                    const isDecommissioned = dev.lifecycle_state === 'DECOMMISSIONED';
+                    const isMaintenance = dev.lifecycle_state === 'MAINTENANCE';
+
+                    return (
+                      <tr
+                        key={dev.id}
+                        className="hover:bg-slate-800/40 transition-colors group cursor-pointer"
+                        onClick={() => navigate(`/devices/${dev.id}`)}
+                      >
+                        <td className="py-3.5 px-4 font-mono font-bold text-amber-400">
+                          {dev.device_code}
+                        </td>
+                        <td className="py-3.5 px-4 font-medium text-slate-100">
+                          {dev.name}
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-300">
+                          {dev.zone?.name || 'Chưa gán'}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <LifecycleBadge state={dev.lifecycle_state} />
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`w-2 h-2 rounded-full ${
+                                dev.is_online ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'
+                              }`}
+                            />
+                            <span
+                              className={`font-semibold ${
+                                dev.is_online ? 'text-emerald-400' : 'text-rose-400'
+                              }`}
+                            >
+                              {dev.is_online ? 'ONLINE' : 'OFFLINE'}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-400 font-mono text-[11px]">
+                          v{dev.fw_version} | {dev.hw_version}
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-400 text-[11px]">
+                          {dev.last_seen_at
+                            ? new Date(dev.last_seen_at).toLocaleTimeString('vi-VN', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit',
+                              })
+                            : 'Chưa có dữ liệu'}
+                        </td>
+                        <td
+                          className="py-3.5 px-4 text-right"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => navigate(`/devices/${dev.id}`)}
+                              title="Xem chi tiết vi khí hậu & điều khiển"
+                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </button>
+
+                            {!isDecommissioned && (
+                              <>
+                                <button
+                                  onClick={() => handleToggleMaintenance(dev)}
+                                  title={isMaintenance ? 'Tắt chế độ bảo trì' : 'Bật chế độ bảo trì'}
+                                  className={`p-1.5 rounded-lg border transition ${
+                                    isMaintenance
+                                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
+                                      : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
+                                  }`}
+                                >
+                                  <Wrench className="w-3.5 h-3.5" />
+                                </button>
+
+                                {isSuspended ? (
+                                  <button
+                                    onClick={() => handleUnsuspend(dev)}
+                                    title="Mở đình chỉ thiết bị"
+                                    className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 transition"
+                                  >
+                                    <RotateCcw className="w-3.5 h-3.5" />
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => setSuspendModalDevice(dev)}
+                                    title="Đình chỉ (Suspend)"
+                                    className="p-1.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition"
+                                  >
+                                    <Ban className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+
+                                <button
+                                  onClick={() => handleDecommission(dev)}
+                                  title="Thu hồi vĩnh viễn (Decommission)"
+                                  className="p-1.5 rounded-lg bg-red-950/40 text-red-400 border border-red-900/60 hover:bg-red-900/80 hover:text-white transition"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* MODAL: ONBOARD NEW DEVICE */}
       {isOnboardModalOpen && (

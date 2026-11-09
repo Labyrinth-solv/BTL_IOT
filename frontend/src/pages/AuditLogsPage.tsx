@@ -12,6 +12,8 @@ import {
   Activity,
   Code,
   Info,
+  LayoutList,
+  Table,
 } from 'lucide-react';
 
 export const AuditLogsPage: React.FC = () => {
@@ -21,6 +23,7 @@ export const AuditLogsPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [actionFilter, setActionFilter] = useState('ALL');
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
+  const [viewMode, setViewMode] = useState<'CARD' | 'TABLE'>('CARD');
 
   const fetchLogs = async () => {
     setIsLoading(true);
@@ -123,50 +126,74 @@ export const AuditLogsPage: React.FC = () => {
           />
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400 whitespace-nowrap">Lọc hành động:</span>
-          <select
-            value={actionFilter}
-            onChange={(e) => setActionFilter(e.target.value)}
-            className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-purple-500"
-          >
-            <option value="ALL">Tất cả hành động ({logs.length})</option>
-            <option value="LOGIN_SUCCESS">LOGIN_SUCCESS</option>
-            <option value="SECURITY_VIOLATION_403">SECURITY_VIOLATION_403</option>
-            <option value="COMMAND_ISSUED">COMMAND_ISSUED</option>
-            <option value="DEVICE_ONBOARDED">DEVICE_ONBOARDED</option>
-            <option value="DEVICE_SUSPENDED">DEVICE_SUSPENDED</option>
-            <option value="ALERT_ACKNOWLEDGED">ALERT_ACKNOWLEDGED</option>
-            <option value="ALERT_RESOLVED">ALERT_RESOLVED</option>
-          </select>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-400 whitespace-nowrap">Lọc hành động:</span>
+            <select
+              value={actionFilter}
+              onChange={(e) => setActionFilter(e.target.value)}
+              className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-purple-500"
+            >
+              <option value="ALL">Tất cả hành động ({logs.length})</option>
+              <option value="LOGIN_SUCCESS">LOGIN_SUCCESS</option>
+              <option value="SECURITY_VIOLATION_403">SECURITY_VIOLATION_403</option>
+              <option value="COMMAND_ISSUED">COMMAND_ISSUED</option>
+              <option value="DEVICE_ONBOARDED">DEVICE_ONBOARDED</option>
+              <option value="DEVICE_SUSPENDED">DEVICE_SUSPENDED</option>
+              <option value="ALERT_ACKNOWLEDGED">ALERT_ACKNOWLEDGED</option>
+              <option value="ALERT_RESOLVED">ALERT_RESOLVED</option>
+            </select>
+          </div>
+
+          {/* Toggle View Mode */}
+          <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+            <button
+              type="button"
+              onClick={() => setViewMode('CARD')}
+              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+                viewMode === 'CARD'
+                  ? 'bg-purple-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Chế độ Thẻ co giãn (Tự động xuống hàng, không bị tràn ngang)"
+            >
+              <LayoutList className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Dạng thẻ co giãn</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('TABLE')}
+              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+                viewMode === 'TABLE'
+                  ? 'bg-purple-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Chế độ Bảng truyền thống"
+            >
+              <Table className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Dạng bảng</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 uppercase font-semibold tracking-wider">
-                <th className="py-3.5 px-4">Thời gian</th>
-                <th className="py-3.5 px-4">Người thực hiện (Actor)</th>
-                <th className="py-3.5 px-4">Hành vi (Action)</th>
-                <th className="py-3.5 px-4">Đối tượng tác động (Target)</th>
-                <th className="py-3.5 px-4">Địa chỉ IP</th>
-                <th className="py-3.5 px-4">Chi tiết JSON</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800 text-slate-200">
-              {filteredLogs.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="py-8 text-center text-slate-400">
-                    Không tìm thấy nhật ký kiểm toán nào.
-                  </td>
-                </tr>
-              ) : (
-                filteredLogs.map((log) => (
-                  <tr key={log.id} className="hover:bg-slate-800/40 transition-colors">
-                    <td className="py-3.5 px-4 text-slate-400 font-mono text-[11px] whitespace-nowrap">
+      {/* CHẾ ĐỘ 1: DẠNG THẺ CO GIÃN (CARD STREAM - KHÔNG TRÀN NGANG) */}
+      {viewMode === 'CARD' ? (
+        <div className="space-y-3">
+          {filteredLogs.length === 0 ? (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-400">
+              Không tìm thấy nhật ký kiểm toán nào.
+            </div>
+          ) : (
+            filteredLogs.map((log) => (
+              <div
+                key={log.id}
+                className="bg-slate-900 border border-slate-800 hover:border-slate-700/80 rounded-2xl p-4 shadow-md transition space-y-3"
+              >
+                {/* Hàng 1: Thời gian, Hành vi badge, Địa chỉ IP */}
+                <div className="flex flex-wrap items-center justify-between gap-2.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-slate-400 font-mono text-xs px-2 py-0.5 rounded bg-slate-950 border border-slate-800">
                       {new Date(log.created_at).toLocaleString('vi-VN', {
                         day: '2-digit',
                         month: '2-digit',
@@ -174,50 +201,139 @@ export const AuditLogsPage: React.FC = () => {
                         minute: '2-digit',
                         second: '2-digit',
                       })}
-                    </td>
-                    <td className="py-3.5 px-4">
-                      {log.actor ? (
-                        <div>
-                          <div className="font-semibold text-slate-200">{log.actor.full_name}</div>
-                          <div className="text-[11px] text-slate-400">
-                            {log.actor.email}{' '}
-                            <span className="text-[9px] px-1 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                              {log.actor.role}
-                            </span>
-                          </div>
-                        </div>
-                      ) : (
-                        <span className="text-slate-500 italic">SYSTEM / UNKNOWN</span>
-                      )}
-                    </td>
-                    <td className="py-3.5 px-4">{getActionBadge(log.action)}</td>
-                    <td className="py-3.5 px-4 font-mono text-slate-300">
-                      <span className="text-slate-500 font-normal">[{log.target_type}]</span>{' '}
-                      {log.target_id}
-                    </td>
-                    <td className="py-3.5 px-4 font-mono text-slate-400 text-[11px]">
-                      {log.ip_address || '127.0.0.1'}
-                    </td>
-                    <td className="py-3.5 px-4">
-                      {log.details_json ? (
-                        <button
-                          onClick={() => setSelectedLog(log)}
-                          className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] border border-slate-700 transition"
-                        >
-                          <Code className="w-3 h-3 text-amber-400" />
-                          <span>Xem Payload</span>
-                        </button>
-                      ) : (
-                        <span className="text-slate-600 italic text-[11px]">Trống</span>
-                      )}
+                    </span>
+                    {getActionBadge(log.action)}
+                  </div>
+
+                  <span className="font-mono text-slate-400 text-xs">
+                    IP: {log.ip_address || '127.0.0.1'}
+                  </span>
+                </div>
+
+                {/* Hàng 2: Người thực hiện & Đối tượng tác động */}
+                <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-slate-300 bg-slate-950/40 p-3 rounded-xl border border-slate-800/60">
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-500">Người thực hiện:</span>
+                    {log.actor ? (
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-semibold text-slate-200">{log.actor.full_name}</span>
+                        <span className="text-slate-400">({log.actor.email})</span>
+                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                          {log.actor.role}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-slate-500 italic">SYSTEM / UNKNOWN</span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-slate-500">Đối tượng:</span>
+                    <span className="text-slate-400 font-normal">[{log.target_type}]</span>
+                    <span className="font-mono font-medium text-amber-400 break-all">{log.target_id}</span>
+                  </div>
+                </div>
+
+                {/* Hàng 3: Xem Payload */}
+                <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-500">
+                    Bản ghi bảo mật bất biến (Tamper-evident Audit Trail)
+                  </span>
+
+                  {log.details_json ? (
+                    <button
+                      onClick={() => setSelectedLog(log)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-purple-300 hover:text-purple-200 text-xs font-semibold border border-purple-500/30 transition shadow-sm"
+                    >
+                      <Code className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Xem Payload JSON</span>
+                    </button>
+                  ) : (
+                    <span className="text-slate-600 italic text-xs">Không có payload</span>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      ) : (
+        /* CHẾ ĐỘ 2: DẠNG BẢNG TRUYỀN THỐNG */
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 uppercase font-semibold tracking-wider">
+                  <th className="py-3.5 px-4">Thời gian</th>
+                  <th className="py-3.5 px-4">Người thực hiện (Actor)</th>
+                  <th className="py-3.5 px-4">Hành vi (Action)</th>
+                  <th className="py-3.5 px-4">Đối tượng tác động (Target)</th>
+                  <th className="py-3.5 px-4">Địa chỉ IP</th>
+                  <th className="py-3.5 px-4">Chi tiết JSON</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800 text-slate-200">
+                {filteredLogs.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-8 text-center text-slate-400">
+                      Không tìm thấy nhật ký kiểm toán nào.
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  filteredLogs.map((log) => (
+                    <tr key={log.id} className="hover:bg-slate-800/40 transition-colors">
+                      <td className="py-3.5 px-4 text-slate-400 font-mono text-[11px] whitespace-nowrap">
+                        {new Date(log.created_at).toLocaleString('vi-VN', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          second: '2-digit',
+                        })}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        {log.actor ? (
+                          <div>
+                            <div className="font-semibold text-slate-200">{log.actor.full_name}</div>
+                            <div className="text-[11px] text-slate-400">
+                              {log.actor.email}{' '}
+                              <span className="text-[9px] px-1 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                                {log.actor.role}
+                              </span>
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-slate-500 italic">SYSTEM / UNKNOWN</span>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-4">{getActionBadge(log.action)}</td>
+                      <td className="py-3.5 px-4 font-mono text-slate-300">
+                        <span className="text-slate-500 font-normal">[{log.target_type}]</span>{' '}
+                        {log.target_id}
+                      </td>
+                      <td className="py-3.5 px-4 font-mono text-slate-400 text-[11px]">
+                        {log.ip_address || '127.0.0.1'}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        {log.details_json ? (
+                          <button
+                            onClick={() => setSelectedLog(log)}
+                            className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] border border-slate-700 transition"
+                          >
+                            <Code className="w-3 h-3 text-amber-400" />
+                            <span>Xem Payload</span>
+                          </button>
+                        ) : (
+                          <span className="text-slate-600 italic text-[11px]">Trống</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* JSON Modal */}
       {selectedLog && (

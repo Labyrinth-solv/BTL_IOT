@@ -31,6 +31,10 @@ dist/
 build/
 out/
 .next/
+frontend/dist/
+
+# Exported CSVs
+*.csv
 
 # IDE & OS
 .vscode/
