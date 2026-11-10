@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		},
+		{
+			"name": "IOT_Firmware",
+			"path": "../../../IOT/IOT_Firmware"
+		}
+	],
+	"settings": {}
+}

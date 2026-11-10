@@ -1,7 +1,17 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include <Arduino.h>
+// Chỉ include Arduino.h khi đang biên dịch trong môi trường Arduino / PlatformIO
+#ifdef ARDUINO
+  #include <Arduino.h>
+#else
+  #ifndef HIGH
+    #define HIGH 1
+  #endif
+  #ifndef LOW
+    #define LOW 0
+  #endif
+#endif
 
 // =============================================================================
 // 1. CẤU HÌNH KẾT NỐI WI-FI VÀ MQTT BROKER
