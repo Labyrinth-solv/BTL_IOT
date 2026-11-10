@@ -123,4 +123,64 @@ export class AlertController {
       res.status(500).json({ success: false, message: 'Lỗi khi đóng cảnh báo' });
     }
   }
+
+  /**
+   * Xóa 1 bản ghi cảnh báo theo ID
+   */
+  static async deleteAlert(req: Request, res: Response): Promise<void> {
+    try {
+      const id = req.params.id as string;
+      await prisma.alert.delete({ where: { id } });
+
+      await AuditService.log({
+        actor_id: req.user?.id,
+        action: 'ALERT_DELETED',
+        target_type: 'ALERT',
+        target_id: id,
+        details_json: { deleted_at: new Date() },
+      });
+
+      res.status(200).json({ success: true, message: 'Đã xóa bản ghi cảnh báo thành công' });
+    } catch (error) {
+      console.error('[AlertController.deleteAlert]', error);
+      res.status(500).json({ success: false, message: 'Lỗi khi xóa cảnh báo' });
+    }
+  }
+
+  /**
+   * Dọn dẹp hàng loạt cảnh báo (đã hoàn tất hoặc toàn bộ để reset demo)
+   */
+  static async clearAlerts(req: Request, res: Response): Promise<void> {
+    try {
+      const { all } = req.query;
+      let count = 0;
+
+      if (all === 'true') {
+        const result = await prisma.alert.deleteMany({});
+        count = result.count;
+      } else {
+        const result = await prisma.alert.deleteMany({
+          where: { status: AlertStatus.RESOLVED },
+        });
+        count = result.count;
+      }
+
+      await AuditService.log({
+        actor_id: req.user?.id,
+        action: 'ALERTS_CLEARED',
+        target_type: 'ALERT',
+        target_id: 'ALL',
+        details_json: { mode: all === 'true' ? 'ALL' : 'RESOLVED_ONLY', deleted_count: count },
+      });
+
+      res.status(200).json({
+        success: true,
+        message: `Đã dọn dẹp thành công ${count} cảnh báo`,
+        deleted_count: count,
+      });
+    } catch (error) {
+      console.error('[AlertController.clearAlerts]', error);
+      res.status(500).json({ success: false, message: 'Lỗi khi dọn dẹp cảnh báo' });
+    }
+  }
 }

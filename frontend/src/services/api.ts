@@ -93,6 +93,10 @@ export const api = {
     request<any>(`/alerts/${id}/ack`, { method: 'POST', body: JSON.stringify({ note }) }),
   resolveAlert: (id: string, note?: string) =>
     request<any>(`/alerts/${id}/resolve`, { method: 'POST', body: JSON.stringify({ note }) }),
+  deleteAlert: (id: string) =>
+    request<any>(`/alerts/${id}`, { method: 'DELETE' }),
+  clearAlerts: (all: boolean = false) =>
+    request<any>(`/alerts/clear?all=${all}`, { method: 'DELETE' }),
 
   // Zones
   getZones: () => request<any>('/zones'),

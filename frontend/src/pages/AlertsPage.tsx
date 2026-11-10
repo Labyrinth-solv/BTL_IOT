@@ -20,6 +20,7 @@ import {
   WifiOff,
   LayoutList,
   Table,
+  Trash2,
 } from 'lucide-react';
 
 export const AlertsPage: React.FC = () => {
@@ -42,6 +43,39 @@ export const AlertsPage: React.FC = () => {
   const [resolveModalAlert, setResolveModalAlert] = useState<Alert | null>(null);
   const [resolveNote, setResolveNote] = useState('');
   const [isSubmittingResolve, setIsSubmittingResolve] = useState(false);
+
+  // Xóa cảnh báo
+  const handleDeleteAlert = async (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!window.confirm('Bạn có chắc chắn muốn xóa cảnh báo này không?')) return;
+    try {
+      const res = await api.deleteAlert(id);
+      if (res.success) {
+        showToast('Đã xóa cảnh báo thành công', 'success');
+        setAlerts((prev) => prev.filter((a) => a.id !== id));
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Lỗi khi xóa cảnh báo', 'error');
+    }
+  };
+
+  // Dọn dẹp hàng loạt cảnh báo
+  const handleClearAlerts = async (all: boolean = false) => {
+    const confirmMsg = all
+      ? 'Bạn có chắc chắn muốn XÓA TOÀN BỘ tất cả cảnh báo trong hệ thống để làm sạch không?'
+      : 'Bạn có chắc muốn dọn sạch tất cả cảnh báo đã hoàn tất (RESOLVED) không?';
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      const res = await api.clearAlerts(all);
+      if (res.success) {
+        showToast(res.message || 'Dọn dẹp cảnh báo thành công', 'success');
+        fetchAlerts();
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Lỗi khi dọn dẹp cảnh báo', 'error');
+    }
+  };
 
   const fetchAlerts = async () => {
     setIsLoading(true);
@@ -188,14 +222,34 @@ export const AlertsPage: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={fetchAlerts}
-          disabled={isLoading}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-          <span>Làm mới</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => handleClearAlerts(false)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition"
+            title="Dọn dẹp các cảnh báo đã xử lý xong để làm gọn danh sách"
+          >
+            <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Dọn cảnh báo đã xong</span>
+          </button>
+
+          <button
+            onClick={() => handleClearAlerts(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-xs font-semibold border border-rose-500/30 transition"
+            title="Xóa toàn bộ tất cả cảnh báo để reset lại hệ thống"
+          >
+            <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+            <span>Xóa tất cả (Reset)</span>
+          </button>
+
+          <button
+            onClick={fetchAlerts}
+            disabled={isLoading}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+            <span>Làm mới</span>
+          </button>
+        </div>
       </div>
 
       {/* Filter Tabs & Search */}
@@ -390,6 +444,15 @@ export const AlertsPage: React.FC = () => {
                         <span>Đã giải quyết xong</span>
                       </span>
                     )}
+
+                    {/* Nút xóa cảnh báo đơn lẻ */}
+                    <button
+                      onClick={(e) => handleDeleteAlert(alert.id, e)}
+                      title="Xóa cảnh báo này"
+                      className="p-2 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 transition"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
 
@@ -520,6 +583,14 @@ export const AlertsPage: React.FC = () => {
                               <span>Đã đóng</span>
                             </span>
                           )}
+
+                          <button
+                            onClick={(e) => handleDeleteAlert(alert.id, e)}
+                            title="Xóa cảnh báo này"
+                            className="p-1 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 border border-slate-700 hover:border-rose-500/40 transition"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
                         </div>
                       </td>
                     </tr>

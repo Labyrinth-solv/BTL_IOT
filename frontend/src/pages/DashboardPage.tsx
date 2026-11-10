@@ -142,20 +142,29 @@ export const DashboardPage: React.FC = () => {
           </div>
         </div>
 
-        {/* KPI 2 */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>Cảnh Báo Chưa Xử Lý</span>
-            <span className="p-2 rounded-xl bg-rose-500/10 text-rose-400">
-              <AlertTriangle className="w-4 h-4" />
+        {/* KPI 2: Cảnh Báo Chưa Xử Lý - Bấm vào để sang ngay tab /alerts */}
+        <div
+          onClick={() => navigate('/alerts')}
+          className="bg-slate-900 border border-slate-800 hover:border-rose-500/60 hover:bg-slate-800/70 rounded-2xl p-4 shadow-sm cursor-pointer transition-all duration-200 group flex flex-col justify-between"
+          title="Nhấn để chuyển sang Trung tâm Cảnh báo"
+        >
+          <div>
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span className="group-hover:text-rose-300 font-medium transition">Cảnh Báo Chưa Xử Lý</span>
+              <span className="p-2 rounded-xl bg-rose-500/10 text-rose-400 group-hover:bg-rose-500/20 group-hover:scale-105 transition">
+                <AlertTriangle className="w-4 h-4" />
+              </span>
+            </div>
+            <div className="text-2xl font-bold text-rose-400 mt-2 flex items-baseline gap-1.5">
+              <span>{kpi?.new_alerts_count || 0}</span>
+              <span className="text-xs font-normal text-slate-400">mới</span>
+            </div>
+          </div>
+          <div className="text-xs text-slate-400 mt-2 flex items-center justify-between">
+            <span>Yêu cầu xác nhận &amp; xử lý</span>
+            <span className="text-rose-400 group-hover:translate-x-1 transition flex items-center gap-0.5 text-[11px] font-semibold">
+              Xem ngay &rarr;
             </span>
-          </div>
-          <div className="text-2xl font-bold text-rose-400 mt-2">
-            {kpi?.new_alerts_count || 0}{' '}
-            <span className="text-xs font-normal text-slate-400">mới</span>
-          </div>
-          <div className="text-xs text-slate-400 mt-2">
-            Yêu cầu Thủ kho xác nhận &amp; xử lý
           </div>
         </div>
 
@@ -277,56 +286,200 @@ export const DashboardPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* 4 Sensor Metric Boxes */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-5">
-                    {/* Nhiệt độ */}
-                    <div className="bg-slate-950/60 p-3 rounded-2xl border border-slate-800/80">
-                      <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                        <Thermometer className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Nhiệt độ</span>
-                      </div>
-                      <div className="text-xl font-bold text-slate-100 mt-1">
-                        {temp}°C
-                      </div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">Mục tiêu &le; 25°C</div>
-                    </div>
+                  {/* 4 Sensor Metric Boxes với chuyển màu Đỏ (CRITICAL) / Vàng (WARNING) theo ngưỡng TCVN 8370 */}
+                  {(() => {
+                    const isTempCrit = temp > 28.0;
+                    const isTempWarn = temp > 25.0;
 
-                    {/* Độ ẩm không khí */}
-                    <div className="bg-slate-950/60 p-3 rounded-2xl border border-slate-800/80">
-                      <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                        <Droplets className="w-3.5 h-3.5 text-blue-400" />
-                        <span>Độ ẩm RH</span>
-                      </div>
-                      <div className="text-xl font-bold text-slate-100 mt-1">
-                        {rh}%
-                      </div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">Giới hạn &le; 65%</div>
-                    </div>
+                    const isRhCrit = rh > 70.0;
+                    const isRhWarn = rh > 65.0;
 
-                    {/* Độ ẩm cân bằng EMC */}
-                    <div className="bg-slate-950/60 p-3 rounded-2xl border border-slate-800/80">
-                      <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                        <Wind className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Độ ẩm EMC</span>
-                      </div>
-                      <div className="text-xl font-bold text-emerald-300 mt-1">
-                        {emc}%
-                      </div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">TCVN &le; 14.0%</div>
-                    </div>
+                    const isEmcCrit = emc > 14.8;
+                    const isEmcWarn = emc > 14.0;
 
-                    {/* Khí Gas MQ-135 */}
-                    <div className="bg-slate-950/60 p-3 rounded-2xl border border-slate-800/80">
-                      <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                        <Flame className="w-3.5 h-3.5 text-purple-400" />
-                        <span>Khí Gas</span>
+                    const isGasCrit = gas >= 700.0;
+                    const isGasWarn = gas >= 600.0;
+
+                    return (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-5">
+                        {/* Nhiệt độ */}
+                        <div
+                          className={`p-3 rounded-2xl border transition-all duration-300 ${
+                            isTempCrit
+                              ? 'bg-rose-500/15 border-rose-500/60 shadow-lg shadow-rose-500/20'
+                              : isTempWarn
+                              ? 'bg-amber-500/10 border-amber-500/50'
+                              : 'bg-slate-950/60 border-slate-800/80'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between text-xs text-slate-400">
+                            <div className="flex items-center gap-1.5">
+                              <Thermometer
+                                className={`w-3.5 h-3.5 ${
+                                  isTempCrit ? 'text-rose-400' : isTempWarn ? 'text-amber-400' : 'text-slate-400'
+                                }`}
+                              />
+                              <span>Nhiệt độ</span>
+                            </div>
+                            {isTempCrit && (
+                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-rose-500 text-slate-950 animate-pulse">
+                                NGUY CẤP
+                              </span>
+                            )}
+                            {!isTempCrit && isTempWarn && (
+                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                BÁO ĐỘNG
+                              </span>
+                            )}
+                          </div>
+                          <div
+                            className={`text-xl font-bold mt-1 ${
+                              isTempCrit
+                                ? 'text-rose-400 font-extrabold animate-pulse'
+                                : isTempWarn
+                                ? 'text-amber-400'
+                                : 'text-slate-100'
+                            }`}
+                          >
+                            {temp}°C
+                          </div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">Mục tiêu &le; 25°C</div>
+                        </div>
+
+                        {/* Độ ẩm không khí RH */}
+                        <div
+                          className={`p-3 rounded-2xl border transition-all duration-300 ${
+                            isRhCrit
+                              ? 'bg-rose-500/15 border-rose-500/60 shadow-lg shadow-rose-500/20'
+                              : isRhWarn
+                              ? 'bg-amber-500/10 border-amber-500/50'
+                              : 'bg-slate-950/60 border-slate-800/80'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between text-xs text-slate-400">
+                            <div className="flex items-center gap-1.5">
+                              <Droplets
+                                className={`w-3.5 h-3.5 ${
+                                  isRhCrit ? 'text-rose-400' : isRhWarn ? 'text-amber-400' : 'text-blue-400'
+                                }`}
+                              />
+                              <span>Độ ẩm RH</span>
+                            </div>
+                            {isRhCrit && (
+                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-rose-500 text-slate-950 animate-pulse">
+                                ẨM TRẦN
+                              </span>
+                            )}
+                            {!isRhCrit && isRhWarn && (
+                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                CẢNH BÁO
+                              </span>
+                            )}
+                          </div>
+                          <div
+                            className={`text-xl font-bold mt-1 ${
+                              isRhCrit
+                                ? 'text-rose-400 font-extrabold animate-pulse'
+                                : isRhWarn
+                                ? 'text-amber-400'
+                                : 'text-slate-100'
+                            }`}
+                          >
+                            {rh}%
+                          </div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">Giới hạn &le; 65%</div>
+                        </div>
+
+                        {/* Độ ẩm cân bằng thóc EMC */}
+                        <div
+                          className={`p-3 rounded-2xl border transition-all duration-300 ${
+                            isEmcCrit
+                              ? 'bg-rose-500/15 border-rose-500/60 shadow-lg shadow-rose-500/20'
+                              : isEmcWarn
+                              ? 'bg-amber-500/10 border-amber-500/50'
+                              : 'bg-slate-950/60 border-slate-800/80'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between text-xs text-slate-400">
+                            <div className="flex items-center gap-1.5">
+                              <Wind
+                                className={`w-3.5 h-3.5 ${
+                                  isEmcCrit ? 'text-rose-400' : isEmcWarn ? 'text-amber-400' : 'text-emerald-400'
+                                }`}
+                              />
+                              <span>Độ ẩm EMC</span>
+                            </div>
+                            {isEmcCrit && (
+                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-rose-500 text-slate-950 animate-pulse">
+                                NGUY HẠI
+                              </span>
+                            )}
+                            {!isEmcCrit && isEmcWarn && (
+                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                CHÚ Ý
+                              </span>
+                            )}
+                          </div>
+                          <div
+                            className={`text-xl font-bold mt-1 ${
+                              isEmcCrit
+                                ? 'text-rose-400 font-extrabold animate-pulse'
+                                : isEmcWarn
+                                ? 'text-amber-400'
+                                : 'text-emerald-300'
+                            }`}
+                          >
+                            {emc}%
+                          </div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">TCVN &le; 14.0%</div>
+                        </div>
+
+                        {/* Khí Gas MQ-135 */}
+                        <div
+                          className={`p-3 rounded-2xl border transition-all duration-300 ${
+                            isGasCrit
+                              ? 'bg-rose-500/15 border-rose-500/60 shadow-lg shadow-rose-500/20'
+                              : isGasWarn
+                              ? 'bg-amber-500/10 border-amber-500/50'
+                              : 'bg-slate-950/60 border-slate-800/80'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between text-xs text-slate-400">
+                            <div className="flex items-center gap-1.5">
+                              <Flame
+                                className={`w-3.5 h-3.5 ${
+                                  isGasCrit ? 'text-rose-400' : isGasWarn ? 'text-amber-400' : 'text-purple-400'
+                                }`}
+                              />
+                              <span>Khí Gas</span>
+                            </div>
+                            {isGasCrit && (
+                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-rose-500 text-slate-950 animate-pulse">
+                                LÊN MEN
+                              </span>
+                            )}
+                            {!isGasCrit && isGasWarn && (
+                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                BÁO ĐỘNG
+                              </span>
+                            )}
+                          </div>
+                          <div
+                            className={`text-xl font-bold mt-1 ${
+                              isGasCrit
+                                ? 'text-rose-400 font-extrabold animate-pulse'
+                                : isGasWarn
+                                ? 'text-amber-400'
+                                : 'text-slate-100'
+                            }`}
+                          >
+                            {gas}
+                          </div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">&lt; 600 ppm</div>
+                        </div>
                       </div>
-                      <div className="text-xl font-bold text-slate-100 mt-1">
-                        {gas}
-                      </div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">&lt; 600 ppm</div>
-                    </div>
-                  </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Footer Controls: Fan toggle with Pending ACK state & Details button */}
