@@ -215,14 +215,15 @@ export class MQTTService {
 
     // H. Xử lý Cảnh báo (Alerts) nếu vượt ngưỡng
     if (ruleResult.alert_needed && ruleResult.alert_type && ruleResult.alert_severity) {
-      // Tránh spam cảnh báo: kiểm tra cảnh báo tương tự trong 5 phút qua
-      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+      // Tránh spam cảnh báo: trong môi trường dev/demo giãn cách 30 giây (production là 5 phút)
+      const antiSpamWindowMs = process.env.NODE_ENV === 'production' ? 5 * 60 * 1000 : 30 * 1000;
+      const recentWindow = new Date(Date.now() - antiSpamWindowMs);
       const recentAlert = await prisma.alert.findFirst({
         where: {
           device_id: device.id,
           alert_type: ruleResult.alert_type,
           status: 'NEW',
-          created_at: { gte: fiveMinutesAgo },
+          created_at: { gte: recentWindow },
         },
       });
 
