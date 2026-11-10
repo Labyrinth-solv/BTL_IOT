@@ -38,13 +38,14 @@
 #define DEFAULT_SAMPLING_INTERVAL_MS 3000
 
 // =============================================================================
-// 3. SƠ ĐỒ ĐẤU NỐI CHÂN GPIO (HARDWARE PINOUT TCVN 8370)
+// 3. SƠ ĐỒ ĐẤU NỐI CHÂN GPIO THEO SƠ ĐỒ MẠCH THỰC TẾ
 // =============================================================================
-// Bus I2C dùng chung cho Cảm biến SHT31 và Màn hình OLED SSD1306
+// Bus I2C dùng chung cho Cảm biến AHT20 (Nhiệt/Ẩm) và BMP280 (Áp suất khí quyển)
 #define PIN_I2C_SDA         21
 #define PIN_I2C_SCL         22
-#define SHT31_I2C_ADDR      0x44
-#define OLED_I2C_ADDR       0x3C
+#define AHT20_I2C_ADDR      0x38  // Địa chỉ I2C mặc định của AHT20
+#define BMP280_I2C_ADDR     0x76  // Địa chỉ I2C của BMP280 (0x76 hoặc 0x77)
+#define OLED_I2C_ADDR       0x3C  // Màn hình OLED (nếu có cắm kèm)
 #define SCREEN_WIDTH        128
 #define SCREEN_HEIGHT       64
 
@@ -52,18 +53,17 @@
 // Sử dụng chân ADC1 (GPIO 34) an toàn khi đang bật Wi-Fi
 #define PIN_MQ135_ANALOG    34
 
-// Cơ cấu chấp hành: Module Relay 5V điều khiển Quạt thông gió DC
-#define PIN_RELAY_FAN       26
-// Mức kích hoạt Relay (Nhiều module Relay 5V kích hoạt ở mức LOW = LOW_LEVEL_TRIGGER)
-#define RELAY_ACTIVE_LEVEL  HIGH  // Đổi thành LOW nếu module Relay của bạn kích hoạt mức LOW
+// Cảm biến Hall phát hiện đóng/mở cửa kho Silo (Hall A3122)
+// Ngõ ra OUT nối GPIO 27 (kèm điện trở kéo xuống 10kΩ về GND)
+#define PIN_DOOR_SENSOR     27
 
-// Còi báo động Buzzer chủ động
-#define PIN_BUZZER          25
+// Cơ cấu chấp hành: Module Relay 2 kênh 5VDC
+#define PIN_RELAY_FAN       26    // Relay kênh 1 (IN1): Đóng ngắt Quạt thông gió 5V
+#define PIN_RELAY_BUZZER    25    // Relay kênh 2 (IN2): Đóng ngắt Còi báo động 5V
 
-// Cụm 3 Đèn LED hiển thị mức rủi ro TCVN
-#define PIN_LED_GREEN       14    // Mức SAFE (An toàn)
-#define PIN_LED_YELLOW      27    // Mức WARNING (Cảnh báo)
-#define PIN_LED_RED         12    // Mức HIGH_RISK (Nguy hiểm)
+// Mức kích hoạt Relay: Module Relay 2 kênh màu xanh kích hoạt ở mức LOW (Active LOW)
+// Khi xuất LOW -> Relay đóng tiếp điểm COM-NO -> Bật Quạt/Còi
+#define RELAY_ACTIVE_LEVEL  LOW   // LOW cho Module Relay Active-Low (đổi sang HIGH nếu dùng module Active-High)
 
 // =============================================================================
 // 4. NGƯỠNG AN TOÀN VI KHÍ HẬU MẶC ĐỊNH THEO TCVN 8370:2018

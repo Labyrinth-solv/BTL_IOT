@@ -2,7 +2,8 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <Wire.h>
-#include <Adafruit_SHT31.h>
+#include <Adafruit_AHTX0.h>
+#include <Adafruit_BMP280.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <ArduinoJson.h>
@@ -16,22 +17,26 @@
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
-Adafruit_SHT31 sht31 = Adafruit_SHT31();
+Adafruit_AHTX0 aht20;
+Adafruit_BMP280 bmp280;
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 // Cờ kiểm tra phần cứng vật lý có đang cắm hay không
-bool hasRealSHT31 = false;
+bool hasRealAHT20 = false;
+bool hasRealBMP280 = false;
 bool hasRealOLED = false;
 
-// Trạng thái cơ cấu chấp hành
+// Trạng thái cơ cấu chấp hành và an ninh cửa
 bool fanState = false;          // false = OFF, true = ON
 bool buzzerState = false;       // false = OFF, true = ON
+bool isDoorOpen = false;        // false = CLOSED, true = OPEN
 String controlMode = "AUTO";    // "AUTO" hoặc "MANUAL"
 String currentRiskLevel = "SAFE"; // "SAFE", "WARNING", "HIGH_RISK"
 
 // Dữ liệu vi khí hậu hiện tại
 float currentTemperature = 24.0f;
 float currentHumidity = 60.0f;
+float currentPressure = 1013.25f; // Áp suất khí quyển (hPa) từ BMP280
 float currentGasPPM = 400.0f;
 float currentEMC = 12.5f;
 
@@ -62,7 +67,7 @@ float calculateHalseyEMC(float tempC, float rhPercent) {
 }
 
 // =============================================================================
-// ĐIỀU KHIỂN CƠ CẤU CHẤP HÀNH VẬT LÝ (RELAY, BUZZER, 3 ĐÈN LED)
+// ĐIỀU KHIỂN CƠ CẤU CHẤP HÀNH VẬT LÝ (RELAY QUẠT & RELAY CÒI BÁO ĐỘNG)
 // =============================================================================
 void setFanRelay(bool enable) {
   fanState = enable;
@@ -75,25 +80,18 @@ void setFanRelay(bool enable) {
 
 void setBuzzer(bool enable) {
   buzzerState = enable;
-  digitalWrite(PIN_BUZZER, enable ? HIGH : LOW);
+  if (RELAY_ACTIVE_LEVEL == HIGH) {
+    digitalWrite(PIN_RELAY_BUZZER, enable ? HIGH : LOW);
+  } else {
+    digitalWrite(PIN_RELAY_BUZZER, enable ? LOW : HIGH);
+  }
 }
 
 void updateRiskIndicators(const String& risk) {
   currentRiskLevel = risk;
   if (risk == "HIGH_RISK") {
-    digitalWrite(PIN_LED_GREEN, LOW);
-    digitalWrite(PIN_LED_YELLOW, LOW);
-    digitalWrite(PIN_LED_RED, HIGH);
     setBuzzer(true);
-  } else if (risk == "WARNING") {
-    digitalWrite(PIN_LED_GREEN, LOW);
-    digitalWrite(PIN_LED_YELLOW, HIGH);
-    digitalWrite(PIN_LED_RED, LOW);
-    setBuzzer(false);
-  } else { // SAFE
-    digitalWrite(PIN_LED_GREEN, HIGH);
-    digitalWrite(PIN_LED_YELLOW, LOW);
-    digitalWrite(PIN_LED_RED, LOW);
+  } else {
     setBuzzer(false);
   }
 }
@@ -135,13 +133,16 @@ void updateOLEDDisplay() {
 }
 
 // =============================================================================
-// ĐỌC CẢM BIẾN (HỖ TRỢ TỰ ĐỘNG GIẢ LẬP AN TOÀN NẾU CHƯA CẮM PHẦN CỨNG)
+// ĐỌC CẢM BIẾN (AHT20, BMP280, MQ-135, HALL SENSOR A3122)
 // =============================================================================
 void readSensors() {
-  if (hasRealSHT31) {
-    float t = sht31.readTemperature();
-    float h = sht31.readHumidity();
-    if (!isnan(t) && !isnan(h) && t >= -40.0f && t <= 125.0f && h >= 0.0f && h <= 100.0f) {
+  // 1. Đọc Cảm biến Nhiệt độ & Độ ẩm AHT20 (I2C)
+  if (hasRealAHT20) {
+    sensors_event_t humidityEvent, tempEvent;
+    aht20.getEvent(&humidityEvent, &tempEvent);
+    float t = tempEvent.temperature;
+    float h = humidityEvent.relative_humidity;
+    if (!isnan(t) && !isnan(h) && t >= -40.0f && t <= 85.0f && h >= 0.0f && h <= 100.0f) {
       currentTemperature = round(t * 10.0f) / 10.0f;
       currentHumidity = round(h * 10.0f) / 10.0f;
     }
@@ -151,7 +152,15 @@ void readSensors() {
     currentHumidity = 61.5f + (random(-8, 9) / 10.0f);
   }
 
-  // Đọc cảm biến khí Gas MQ-135 từ kênh ADC1 (GPIO 34)
+  // 2. Đọc Cảm biến Áp suất khí quyển BMP280 (I2C)
+  if (hasRealBMP280) {
+    float p = bmp280.readPressure() / 100.0f; // Đổi từ Pa sang hPa
+    if (!isnan(p) && p > 300.0f && p < 1200.0f) {
+      currentPressure = round(p * 10.0f) / 10.0f;
+    }
+  }
+
+  // 3. Đọc Cảm biến khí Gas MQ-135 từ kênh ADC1 (GPIO 34)
   int rawADC = analogRead(PIN_MQ135_ANALOG);
   if (rawADC > 100) {
     // Ước tính PPM tương đối từ điện áp ADC
@@ -160,10 +169,15 @@ void readSensors() {
     currentGasPPM = 405.0f + random(-10, 11);
   }
 
-  // Tính toán EMC theo Halsey
+  // 4. Đọc Cảm biến Cửa kho Silo (Hall Sensor A3122 trên GPIO 27)
+  // Ngõ ra OUT nối trở kéo xuống 10kΩ về GND
+  int doorVal = digitalRead(PIN_DOOR_SENSOR);
+  isDoorOpen = (doorVal == HIGH);
+
+  // 5. Tính toán EMC theo Halsey
   currentEMC = calculateHalseyEMC(currentTemperature, currentHumidity);
 
-  // Đánh giá mức rủi ro theo ngưỡng TCVN 8370
+  // 6. Đánh giá mức rủi ro theo ngưỡng TCVN 8370
   String evaluatedRisk = "SAFE";
   if (currentHumidity >= THRESHOLD_HUM_CRIT || currentTemperature >= THRESHOLD_TEMP_CRIT ||
       currentEMC >= THRESHOLD_EMC_CRIT || currentGasPPM >= THRESHOLD_GAS_CRIT) {
@@ -247,10 +261,15 @@ void sendTelemetry() {
   mEMC["value"] = currentEMC;
   mEMC["unit"]  = "%MC";
 
+  JsonObject mPress = metrics.createNestedObject("pressure");
+  mPress["value"] = currentPressure;
+  mPress["unit"]  = "hPa";
+
   // Actuators & Risk Level
   JsonObject actuators = doc.createNestedObject("actuators");
   actuators["fan_state"]    = fanState ? "ON" : "OFF";
   actuators["buzzer_state"] = buzzerState ? "ON" : "OFF";
+  actuators["door_open"]    = isDoorOpen ? "OPEN" : "CLOSED";
   actuators["control_mode"] = controlMode;
   actuators["risk_level"]   = currentRiskLevel;
 
@@ -260,9 +279,9 @@ void sendTelemetry() {
   serializeJson(doc, buffer);
   mqttClient.publish(topicTelemetry.c_str(), buffer, false);
 
-  Serial.printf("📊 [Telemetry] T=%.1fC | RH=%.1f%% | EMC=%.1f%% | Gas=%.0f ppm | Fan=%s | Risk=%s\n",
-                currentTemperature, currentHumidity, currentEMC, currentGasPPM,
-                fanState ? "ON" : "OFF", currentRiskLevel.c_str());
+  Serial.printf("📊 [Telemetry] T=%.1fC | RH=%.1f%% | EMC=%.1f%% | P=%.1f hPa | Gas=%.0f ppm | Fan=%s | Door=%s | Risk=%s\n",
+                currentTemperature, currentHumidity, currentEMC, currentPressure, currentGasPPM,
+                fanState ? "ON" : "OFF", isDoorOpen ? "OPEN" : "CLOSED", currentRiskLevel.c_str());
 }
 
 // =============================================================================
@@ -412,22 +431,36 @@ void setup() {
   Serial.printf("Firmware v%s | Hardware: %s\n", FIRMWARE_VERSION, HARDWARE_VERSION);
   Serial.println("========================================================");
 
-  // 1. Cấu hình các chân GPIO cơ cấu chấp hành và LED
+  // 1. Cấu hình các chân GPIO cơ cấu chấp hành Relay và Cảm biến cửa
   pinMode(PIN_RELAY_FAN, OUTPUT);
-  pinMode(PIN_BUZZER, OUTPUT);
-  pinMode(PIN_LED_GREEN, OUTPUT);
-  pinMode(PIN_LED_YELLOW, OUTPUT);
-  pinMode(PIN_LED_RED, OUTPUT);
+  pinMode(PIN_RELAY_BUZZER, OUTPUT);
+  pinMode(PIN_DOOR_SENSOR, INPUT);
 
-  // Trạng thái ban đầu: Tắt quạt, tắt còi, bật LED Xanh (SAFE)
+  // Trạng thái ban đầu: Tắt quạt, tắt còi
   setFanRelay(false);
   setBuzzer(false);
   updateRiskIndicators("SAFE");
 
-  // 2. Khởi tạo Bus I2C
+  // 2. Khởi tạo Bus I2C (SDA = GPIO 21, SCL = GPIO 22)
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
 
-  // 3. Khởi tạo Màn hình OLED SSD1306 (nếu có cắm)
+  // 3. Khởi tạo Cảm biến nhiệt độ & độ ẩm AHT20
+  if (aht20.begin()) {
+    hasRealAHT20 = true;
+    Serial.println("✅ [Hardware] Cam bien nhiet am AHT20 san sang (I2C 0x38)!");
+  } else {
+    Serial.println("⚠️ [Hardware] Khong tim thay AHT20! Tu dong chay Che Do Gia Lap Test an toan.");
+  }
+
+  // 4. Khởi tạo Cảm biến áp suất khí quyển BMP280
+  if (bmp280.begin(BMP280_I2C_ADDR) || bmp280.begin(0x77)) {
+    hasRealBMP280 = true;
+    Serial.println("✅ [Hardware] Cam bien ap suat BMP280 san sang!");
+  } else {
+    Serial.println("ℹ️ [Hardware] BMP280 chua san sang hoac chua cam (I2C 0x76/0x77).");
+  }
+
+  // 5. Khởi tạo Màn hình OLED SSD1306 (nếu có cắm kèm)
   if (display.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDR)) {
     hasRealOLED = true;
     display.clearDisplay();
@@ -440,15 +473,7 @@ void setup() {
     display.display();
     Serial.println("✅ [Hardware] Man hinh OLED 0.96 inch san sang!");
   } else {
-    Serial.println("⚠️ [Hardware] Khong tim thay OLED I2C (Se bo qua hien thi tai cho).");
-  }
-
-  // 4. Khởi tạo Cảm biến SHT31 (nếu có cắm)
-  if (sht31.begin(SHT31_I2C_ADDR)) {
-    hasRealSHT31 = true;
-    Serial.println("✅ [Hardware] Cam bien nhiet am SHT31 san sang!");
-  } else {
-    Serial.println("⚠️ [Hardware] Khong tim thay SHT31! Tu dong chay Che Do Gia Lap Test an toan.");
+    Serial.println("⚠️ [Hardware] Khong tim thay OLED I2C (Bo qua hien thi tai cho).");
   }
 
   // 5. Cấu hình MQTT Client
