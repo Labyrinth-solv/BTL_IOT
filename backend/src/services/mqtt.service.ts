@@ -256,16 +256,25 @@ export class MQTTService {
       }
     }
 
-    // I. Tự động điều khiển quạt ở chế độ AUTO khi vượt ngưỡng
+    // I. Tự động điều khiển quạt ở chế độ AUTO khi vượt ngưỡng hoặc khi trở lại an toàn
     const controlMode = actuators?.control_mode || 'AUTO';
-    if (controlMode === 'AUTO' && ruleResult.should_turn_on_fan && actuators?.fan_state !== 'ON') {
-      console.log(`⚡ [RuleEngine Auto-Fan] Tự động phát lệnh BẬT QUẠT cho thiết bị ${deviceCode}`);
-      await this.publishCommand(device.id, deviceCode, 'ACTUATOR_CONTROL', {
-        target: 'VENTILATION_FAN',
-        action: 'TURN_ON',
-        control_mode: 'AUTO',
-        duration_sec: 300,
-      });
+    if (controlMode === 'AUTO') {
+      if (ruleResult.should_turn_on_fan && actuators?.fan_state !== 'ON') {
+        console.log(`⚡ [RuleEngine Auto-Fan] Tự động phát lệnh BẬT QUẠT cho thiết bị ${deviceCode} (Vi phạm ngưỡng vi khí hậu)`);
+        await this.publishCommand(device.id, deviceCode, 'ACTUATOR_CONTROL', {
+          target: 'VENTILATION_FAN',
+          action: 'TURN_ON',
+          control_mode: 'AUTO',
+          duration_sec: 300,
+        });
+      } else if (!ruleResult.should_turn_on_fan && actuators?.fan_state === 'ON') {
+        console.log(`🌿 [RuleEngine Auto-Fan] Tự động phát lệnh TẮT QUẠT cho thiết bị ${deviceCode} (Kho đã trở về ngưỡng AN TOÀN)`);
+        await this.publishCommand(device.id, deviceCode, 'ACTUATOR_CONTROL', {
+          target: 'VENTILATION_FAN',
+          action: 'TURN_OFF',
+          control_mode: 'AUTO',
+        });
+      }
     }
 
     // J. Đẩy dữ liệu thời gian thực qua WebSocket lên Dashboard
