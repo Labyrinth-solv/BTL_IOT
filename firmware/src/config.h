@@ -38,32 +38,28 @@
 #define DEFAULT_SAMPLING_INTERVAL_MS 3000
 
 // =============================================================================
-// 3. SƠ ĐỒ ĐẤU NỐI CHÂN GPIO THEO SƠ ĐỒ MẠCH THỰC TẾ
+// 3. SƠ ĐỒ ĐẤU NỐI CHÂN GPIO CHÍNH THỨC (ESP32-WROOM-32D)
 // =============================================================================
-// Bus I2C dùng chung cho Cảm biến AHT20 (Nhiệt/Ẩm) và BMP280 (Áp suất khí quyển)
+// 1) Cảm biến Nhiệt độ & Độ ẩm AHT20 (Nguồn 3.3V) - Bus I2C
 #define PIN_I2C_SDA         21
 #define PIN_I2C_SCL         22
 #define AHT20_I2C_ADDR      0x38  // Địa chỉ I2C mặc định của AHT20
-#define BMP280_I2C_ADDR     0x76  // Địa chỉ I2C của BMP280 (0x76 hoặc 0x77)
-#define OLED_I2C_ADDR       0x3C  // Màn hình OLED (nếu có cắm kèm)
-#define SCREEN_WIDTH        128
-#define SCREEN_HEIGHT       64
 
-// Cảm biến chất lượng không khí & khí Gas lên men MQ-135
-// Sử dụng chân ADC1 (GPIO 34) an toàn khi đang bật Wi-Fi
+// 2) Cảm biến chất lượng không khí & khí Gas MQ-135 (Nguồn 5V)
+// Chân AO đưa qua mạch chia áp (15kΩ + 10kΩ) vào kênh ADC1 (GPIO 34) an toàn khi bật Wi-Fi
 #define PIN_MQ135_ANALOG    34
 
-// Cảm biến Hall phát hiện đóng/mở cửa kho Silo (Hall A3122)
-// Ngõ ra OUT nối GPIO 27 (kèm điện trở kéo xuống 10kΩ về GND)
+// 3) Cảm biến từ cửa kho (Hall / Reed switch)
+// Chân D0 nối vào GPIO 27
 #define PIN_DOOR_SENSOR     27
 
-// Cơ cấu chấp hành: Module Relay 2 kênh 5VDC
-#define PIN_RELAY_FAN       26    // Relay kênh 1 (IN1): Đóng ngắt Quạt thông gió 5V
-#define PIN_RELAY_BUZZER    25    // Relay kênh 2 (IN2): Đóng ngắt Còi báo động 5V
+// 4) Module Relay 2 kênh 5VDC điều khiển Quạt 5V và Còi 5V qua tiếp điểm COM-NO
+#define PIN_RELAY_FAN       25    // Relay Kênh 1 (IN1): COM1=5V, NO1=(+) Quạt -> Quạt 5V
+#define PIN_RELAY_BUZZER    33    // Relay Kênh 2 (IN2): COM2=5V, NO2=(+) Còi  -> Còi 5V
 
-// Mức kích hoạt Relay: Module Relay 2 kênh màu xanh kích hoạt ở mức LOW (Active LOW)
-// Khi xuất LOW -> Relay đóng tiếp điểm COM-NO -> Bật Quạt/Còi
-#define RELAY_ACTIVE_LEVEL  LOW   // LOW cho Module Relay Active-Low (đổi sang HIGH nếu dùng module Active-High)
+// Mức kích hoạt Relay: Module Relay 2 kênh 5V thông dụng kích hoạt ở mức LOW (Active LOW)
+// Khi xuất LOW -> Đóng tiếp điểm COM-NO -> Bật Quạt/Còi
+#define RELAY_ACTIVE_LEVEL  LOW   // Đổi thành HIGH nếu module Relay kích hoạt mức HIGH
 
 // =============================================================================
 // 4. NGƯỠNG AN TOÀN VI KHÍ HẬU MẶC ĐỊNH THEO TCVN 8370:2018

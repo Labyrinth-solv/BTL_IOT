@@ -13,20 +13,17 @@
 
 ---
 
-## 🔌 2. Bảng Sơ Đồ Đấu Nối Chân GPIO (Hardware Pinout)
+## 🔌 2. Bảng Sơ Đồ Đấu Nối Chân GPIO (Hardware Pinout Chính Thức)
 
-Khi bạn bắt đầu nối dây linh kiện, hãy đấu nối theo đúng sơ đồ chuẩn tại **Mục 6.1 của Đặc tả TCVN 8370**:
+Khi đấu nối phần cứng trên Breadboard với Nguồn tổ ong 5V-5A, hãy đấu nối theo đúng bảng chuẩn sau:
 
 | STT | Linh Kiện | Chân Linh Kiện | Chân ESP32 (GPIO) | Ghi Chú Kỹ Thuật |
 | :---: | :--- | :---: | :---: | :--- |
-| **1** | **Cảm biến SHT31** (Nhiệt & Độ ẩm) | `VIN`<br>`GND`<br>`SDA`<br>`SCL` | `3V3`<br>`GND`<br>`GPIO 21`<br>`GPIO 22` | Giao tiếp I2C (Địa chỉ mặc định: `0x44`). Độ chính xác cao ±2% RH. |
-| **2** | **Màn hình OLED 0.96"** (SSD1306) | `VCC`<br>`GND`<br>`SDA`<br>`SCL` | `3V3`<br>`GND`<br>`GPIO 21`<br>`GPIO 22` | Mắc song song chung đường Bus I2C với SHT31 (Địa chỉ: `0x3C`). |
-| **3** | **Cảm biến MQ-135** (Khí Gas lên men) | `VCC`<br>`GND`<br>`A0 (Analog)` | `5V (VIN)`<br>`GND`<br>`GPIO 34` | Dùng kênh `ADC1_CH6` (GPIO 34) vì kênh ADC2 bị chiếm dụng khi bật Wi-Fi. |
-| **4** | **Module Relay 5V** (Quạt thông gió) | `VCC`<br>`GND`<br>`IN` | `5V (VIN)`<br>`GND`<br>`GPIO 26` | Kích hoạt quạt DC 5V/12V qua tiếp điểm COM - NO. |
-| **5** | **Còi Buzzer chủ động** | `(+)`<br>`(-)` | `GPIO 25`<br>`GND` | Báo động khi nồng độ khí gas hoặc nhiệt ẩm vượt ngưỡng `HIGH_RISK`. |
-| **6** | **LED Xanh (SAFE)** | Anode (+)<br>Cathode (-) | `GPIO 14`<br>`GND` | Nối tiếp qua điện trở `220 Ω` về GND. Sáng khi kho an toàn. |
-| **7** | **LED Vàng (WARNING)** | Anode (+)<br>Cathode (-) | `GPIO 27`<br>`GND` | Nối tiếp qua điện trở `220 Ω` về GND. Sáng khi cảnh báo ẩm. |
-| **8** | **LED Đỏ (HIGH RISK)** | Anode (+)<br>Cathode (-) | `GPIO 12`<br>`GND` | Nối tiếp qua điện trở `220 Ω` về GND. Sáng khi nguy hiểm cao. |
+| **1** | **Cảm biến AHT20** (Nhiệt & Độ ẩm) | `VIN`<br>`GND`<br>`SDA`<br>`SCL` | `3V3`<br>`GND`<br>`GPIO 21`<br>`GPIO 22` | Giao tiếp I2C (Địa chỉ: `0x38`). Nguồn 3.3V lấy từ ESP32. |
+| **2** | **Cảm biến MQ-135** (Khí Gas lên men) | `VCC`<br>`GND`<br>`A0 (Analog)` | `5V (Nguồn tổ ong)`<br>`GND`<br>`GPIO 34` | Đưa chân AO qua **cầu chia áp 15kΩ + 10kΩ** vào `GPIO 34` (ADC1). |
+| **3** | **Cảm biến từ cửa** (Hall / Reed Switch) | `VCC`<br>`GND`<br>`D0` | `3V3`<br>`GND`<br>`GPIO 27` | Theo dõi đóng/mở cửa kho Silo. |
+| **4** | **Module Relay 2 kênh 5V** | `VCC`<br>`GND`<br>`IN1 (Quạt 5V)`<br>`IN2 (Còi 5V)` | `5V (Nguồn tổ ong)`<br>`GND`<br>`GPIO 25`<br>`GPIO 33` | Kênh 1 (`COM1-NO1`) đóng ngắt Quạt 5V.<br>Kênh 2 (`COM2-NO2`) đóng ngắt Còi 5V. |
+| **5** | **ESP32-WROOM-32D** | `VIN / 5V`<br>`GND` | `Nguồn 5V tổ ong`<br>`GND chung` | Mọi chân `GND` của tất cả module phải nối chung với `V-` nguồn tổ ong. |
 
 ---
 
@@ -57,12 +54,10 @@ Bạn có thể lựa chọn 1 trong 2 cách nạp phổ biến nhất dưới �
    - Vào `File` &rarr; `Preferences` &rarr; dán link sau vào mục *Additional Boards Manager URLs*:  
      `https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json`
    - Vào `Tools` &rarr; `Board` &rarr; `Boards Manager` &rarr; Tìm **esp32** và bấm **Install**.
-3. Cài đặt các thư viện cần thiết qua `Tools` &rarr; `Manage Libraries...`:
+3. Cài đặt 3 thư viện cần thiết qua `Tools` &rarr; `Manage Libraries...`:
    - `PubSubClient` (tác giả Nick O'Leary)
    - `ArduinoJson` (tác giả Benoit Blanchon)
-   - `Adafruit SHT31 Library` (Adafruit)
-   - `Adafruit SSD1306` (Adafruit)
-   - `Adafruit GFX Library` (Adafruit)
+   - `Adafruit AHTX0` (tác giả Adafruit)
 4. Mở file: `firmware/esp32_grain_node/esp32_grain_node.ino`.
 5. Chọn Board và Cổng COM:
    - `Tools` &rarr; `Board` &rarr; `esp32` &rarr; **DOIT ESP32 DEVKIT V1** (hoặc ESP32 Dev Module).
@@ -101,7 +96,7 @@ Bạn có thể lựa chọn 1 trong 2 cách nạp phổ biến nhất dưới �
    - Cứ mỗi 3 giây, số đo nhiệt ẩm, EMC, khí gas được cập nhật trực tiếp từ ESP32.
 3. **Thử điều khiển quạt thật từ Web:**
    - Trên Web Dashboard, bấm bật công tắc **Quạt thông gió**.
-   - ESP32 nhận lệnh qua MQTT `/cmd`, đổi chân `GPIO 26` lên mức `HIGH`, in ra Serial:
+   - ESP32 nhận lệnh qua MQTT `/cmd`, kích hoạt Relay 1 (`GPIO 25`), in ra Serial:
      `📥 [MQTT Command] Nhan lenh tu topic: ...`
-     `📤 [MQTT ACK] Da gui phan hoi ACK: Relay GPIO 26 switched HIGH`
+     `📤 [MQTT ACK] Da gui phan hoi ACK: Relay 1 (GPIO 25) da BAT Quat thong gio`
    - Quạt trên Web chuyển sang **BẬT (ON)** ngay sau khi nhận ACK từ ESP32!
