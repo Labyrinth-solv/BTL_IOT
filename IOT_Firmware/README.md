@@ -360,14 +360,17 @@ ESP32 tự động gửi lại sau khi kích hoạt chân Relay:
 
 ## 🛠️ 8. Hướng Dẫn Cấu Hình & Nạp Code Lên ESP32
 
-1. **Cấu hình mạng Wi-Fi, IP MQTT và Chân GPIO** trong file [src/config.h](file:///d:/Work/IOT/IOT_Firmware/src/config.h):
-   - `WIFI_SSID`: `"VT_VN"`
-   - `WIFI_PASSWORD`: `"duc12345678"`
-   - `MQTT_SERVER_IP`: `"10.250.190.42"` (hoặc IP máy tính của bạn)
+1. **Mở đúng Workspace trong VS Code:**
+   - Mở file [../BTL_IOT.code-workspace](../BTL_IOT.code-workspace) (hoặc mở trực tiếp thư mục `IOT_Firmware`) để extension **PlatformIO IDE** nhận diện project.
+2. **Cấu hình mạng Wi-Fi, IP MQTT, ID Node và Chân GPIO** trong file [src/config.h](./src/config.h):
+   - `WIFI_SSID` & `WIFI_PASSWORD`: Wi-Fi băng tần **2.4 GHz**.
+   - `MQTT_SERVER_IP`: địa chỉ IPv4 LAN của máy tính chạy Mosquitto Broker (mặc định Port `1883`).
+   - `USE_MAC_AS_DEVICE_ID`: đặt `false` nếu giữ nguyên `DEVICE_ID` (`"DEV_SILO_01"`), hoặc đặt `true` để tự sinh mã `ESP32_XXXXXX` theo MAC khi nạp nhiều mạch.
    - `PIN_RELAY_FAN`: `25` (`IN1`), `PIN_RELAY_BUZZER`: `33` (`IN2`) — đổi thành `26` nếu dây thực tế cắm ở GPIO 26.
-2. **Nạp code trực tiếp từ VS Code**:
-   - Cắm cáp USB nối ESP32 vào máy tính.
-   - Nhấn vào biểu tượng **`→` PlatformIO: Upload** ở thanh dưới cùng.
-   - *(Nếu thấy `Connecting...`, nhấn giữ nút `BOOT` trên board trong 1 giây để nạp).*
-3. **Mở Serial Monitor**:
-   - Bấm vào biểu tượng **Phích cắm (`Plug`)** để quan sát log nhận diện cảm biến AHT20, MQ-135 và cảm biến từ cửa.
+   - `ENABLE_SENSOR_SIMULATION_FALLBACK`: đặt `false` khi chạy phần cứng thật để báo đúng lỗi rút dây/hở mạch lên Web (`DISCONNECTED` / `OUT_OF_RANGE`); đặt `true` nếu chỉ test mạch trống chưa gắn cảm biến.
+3. **Nạp code từ PlatformIO (tự động dò cổng COM):**
+   - Trong [platformio.ini](./platformio.ini) đã bỏ cố định `COM3` để PlatformIO tự dò cổng USB-UART của ESP32 đang cắm.
+   - Cắm cáp USB truyền dữ liệu vào ESP32 → nhấn biểu tượng **`→` PlatformIO: Upload** ở thanh dưới cùng (hoặc mở terminal tại thư mục `IOT_Firmware` và chạy `pio run -t upload` / `& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -t upload`).
+   - *(Nếu màn hình đứng ở `Connecting...`, nhấn giữ nút `BOOT` trên board trong 1–2 giây để vào chế độ nạp).*
+4. **Mở Serial Monitor (`115200` baud):**
+   - Bấm vào biểu tượng **Phích cắm (`Plug`)** ở thanh dưới cùng để quan sát log Wi-Fi, MQTT, cấu hình khôi phục từ Flash **NVS (`Preferences`)** và trạng thái nhận diện `AHT20` / `MQ-135` / cửa kho.
