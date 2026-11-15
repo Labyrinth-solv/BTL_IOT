@@ -54,8 +54,14 @@ export const api = {
 
   // Devices
   getDevices: () => request<any>('/devices'),
+  getDiscoveredDevices: () => request<any>('/devices/discovered'),
   getDeviceById: (id: string) => request<any>(`/devices/${id}`),
   onboardDevice: (body: any) => request<any>('/devices', { method: 'POST', body: JSON.stringify(body) }),
+  updateDevice: (id: string, body: any) =>
+    request<any>(`/devices/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteDevice: (id: string) => request<any>(`/devices/${id}`, { method: 'DELETE' }),
+  rotateDeviceToken: (id: string) =>
+    request<any>(`/devices/${id}/rotate-token`, { method: 'POST' }),
   provisionDevice: (id: string, body: any) =>
     request<any>(`/devices/${id}/provision`, { method: 'POST', body: JSON.stringify(body) }),
   activateDevice: (id: string) => request<any>(`/devices/${id}/activate`, { method: 'POST' }),

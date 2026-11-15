@@ -58,7 +58,7 @@ export const LoginPage: React.FC = () => {
               className="px-2.5 py-2 rounded-xl bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 text-xs font-semibold transition-all flex flex-col items-center gap-1"
             >
               <Shield className="w-4 h-4 text-purple-400" />
-              <span>Admin</span>
+              <span>Chủ kho (Admin)</span>
             </button>
             <button
               type="button"
@@ -66,7 +66,7 @@ export const LoginPage: React.FC = () => {
               className="px-2.5 py-2 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 border border-blue-500/30 text-xs font-semibold transition-all flex flex-col items-center gap-1"
             >
               <Wrench className="w-4 h-4 text-blue-400" />
-              <span>Operator</span>
+              <span>Vận hành</span>
             </button>
             <button
               type="button"
@@ -74,7 +74,7 @@ export const LoginPage: React.FC = () => {
               className="px-2.5 py-2 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-semibold transition-all flex flex-col items-center gap-1"
             >
               <Eye className="w-4 h-4 text-emerald-400" />
-              <span>Viewer</span>
+              <span>Giám sát QC</span>
             </button>
           </div>
         </div>

@@ -12,8 +12,25 @@ router.use(authenticateJWT);
 // Xem danh sách thiết bị: ADMIN, OPERATOR, VIEWER
 router.get('/', DeviceController.getAll);
 
+// Danh sách thiết bị ESP32 vừa kết nối MQTT nhưng chưa đăng ký
+router.get('/discovered', DeviceController.getDiscovered);
+
 // Chi tiết 1 thiết bị: ADMIN, OPERATOR, VIEWER (kiểm tra phân quyền kho)
 router.get('/:id', checkDeviceOrZoneAccess, DeviceController.getById);
+
+// Cập nhật thông tin thiết bị (Tên, Kho, FW, HW)
+router.put(
+  '/:id',
+  requireRoles(Role.ADMIN, Role.OPERATOR),
+  checkDeviceOrZoneAccess,
+  DeviceController.update
+);
+
+// Xóa vĩnh viễn thiết bị và log liên quan (ADMIN ONLY)
+router.delete('/:id', requireRoles(Role.ADMIN), DeviceController.remove);
+
+// Cấp lại Secret Token mới (ADMIN ONLY)
+router.post('/:id/rotate-token', requireRoles(Role.ADMIN), DeviceController.rotateToken);
 
 // Bước 1 & 2: Onboard thiết bị mới và sinh secret token (ADMIN ONLY)
 router.post('/', requireRoles(Role.ADMIN), DeviceController.onboard);

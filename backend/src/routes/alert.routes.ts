@@ -17,11 +17,11 @@ router.post('/:id/ack', requireRoles(Role.ADMIN, Role.OPERATOR), AlertController
 // Xử lý và đóng cảnh báo RESOLVE (ADMIN & OPERATOR) - Chặn VIEWER 403
 router.post('/:id/resolve', requireRoles(Role.ADMIN, Role.OPERATOR), AlertController.resolve);
 
-// Dọn dẹp hàng loạt cảnh báo (đã hoàn tất hoặc toàn bộ)
-router.delete('/clear', AlertController.clearAlerts);
+// Dọn dẹp hàng loạt cảnh báo (ADMIN & OPERATOR) - Chặn VIEWER 403
+router.delete('/clear', requireRoles(Role.ADMIN, Role.OPERATOR), AlertController.clearAlerts);
 
-// Xóa 1 cảnh báo theo ID
-router.delete('/:id', AlertController.deleteAlert);
+// Xóa 1 cảnh báo theo ID (ADMIN & OPERATOR) - Chặn VIEWER 403
+router.delete('/:id', requireRoles(Role.ADMIN, Role.OPERATOR), AlertController.deleteAlert);
 
 export default router;
 

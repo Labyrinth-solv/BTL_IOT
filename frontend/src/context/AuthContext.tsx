@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { User, Role } from '../types';
+import { User, Role, getRoleDisplayName } from '../types';
 import { api, ApiError } from '../services/api';
 
 interface AuthContextType {
@@ -74,7 +74,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.setItem('grain_token', res.data.token);
         setToken(res.data.token);
         setUser(res.data.user);
-        showToast(`Đăng nhập thành công với vai trò: ${res.data.user.role}`, 'success');
+        showToast(`Đăng nhập thành công với vai trò: ${getRoleDisplayName(res.data.user.role)}`, 'success');
         return true;
       }
       return false;

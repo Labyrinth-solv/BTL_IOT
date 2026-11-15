@@ -1,13 +1,21 @@
 import React from 'react';
 import { useAuth } from '../context/AuthContext';
+import { getRoleDisplayName } from '../types';
 import { LogOut, Cpu, User, Shield, Warehouse } from 'lucide-react';
 
 interface NavbarProps {
   onToggleSimulator: () => void;
   isSimulatorOpen: boolean;
+  showSimulator: boolean;
+  isRealDeviceMode: boolean;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ onToggleSimulator, isSimulatorOpen }) => {
+export const Navbar: React.FC<NavbarProps> = ({
+  onToggleSimulator,
+  isSimulatorOpen,
+  showSimulator,
+  isRealDeviceMode,
+}) => {
   const { user, logout, quickLogin } = useAuth();
 
   const getRoleBadge = (role?: string) => {
@@ -47,48 +55,63 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleSimulator, isSimulatorOp
           <span className="text-slate-400 px-2 py-1 font-medium">Đổi vai trò:</span>
           <button
             onClick={() => quickLogin('ADMIN')}
+            title="Chủ kho / Quản trị toàn hệ thống (ADMIN)"
             className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
               user?.role === 'ADMIN'
                 ? 'bg-purple-600 text-white shadow-sm'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            Admin
+            Chủ kho (Admin)
           </button>
           <button
             onClick={() => quickLogin('OPERATOR')}
+            title="Nhân viên kỹ thuật & vận hành kho (OPERATOR)"
             className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
               user?.role === 'OPERATOR'
                 ? 'bg-blue-600 text-white shadow-sm'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            Operator
+            Vận hành
           </button>
           <button
             onClick={() => quickLogin('VIEWER')}
+            title="Bộ phận kiểm định chất lượng / Chỉ xem (VIEWER)"
             className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
               user?.role === 'VIEWER'
                 ? 'bg-emerald-600 text-white shadow-sm'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            Viewer
+            Giám sát QC
           </button>
         </div>
 
-        {/* Simulator Drawer Trigger Button */}
-        <button
-          onClick={onToggleSimulator}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
-            isSimulatorOpen
-              ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/20'
-              : 'bg-amber-500/10 text-amber-300 border-amber-500/30 hover:bg-amber-500/20 hover:border-amber-500/50'
-          }`}
-        >
-          <Cpu className="w-4 h-4 animate-pulse" />
-          <span>Hardware Simulator</span>
-        </button>
+        {/* Simulator Drawer Trigger Button (ẩn khi dùng thiết bị thực / không chạy simulator) */}
+        {showSimulator ? (
+          <button
+            onClick={onToggleSimulator}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
+              isSimulatorOpen
+                ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/20'
+                : 'bg-amber-500/10 text-amber-300 border-amber-500/30 hover:bg-amber-500/20 hover:border-amber-500/50'
+            }`}
+          >
+            <Cpu className="w-4 h-4 animate-pulse" />
+            <span>Hardware Simulator</span>
+          </button>
+        ) : (
+          isRealDeviceMode && (
+            <div
+              className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500/10 text-emerald-300 border border-emerald-500/30"
+              title="Đang nhận dữ liệu trực tiếp từ phần cứng ESP32 qua MQTT"
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span>Thiết bị thực (Live)</span>
+            </div>
+          )
+        )}
 
         {/* User Profile */}
         <div className="flex items-center gap-3 pl-2 border-l border-slate-800">
@@ -96,7 +119,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleSimulator, isSimulatorOp
             <div className="text-xs font-semibold text-slate-200">{user?.full_name}</div>
             <div className="flex items-center justify-end gap-1.5 mt-0.5">
               <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded border ${getRoleBadge(user?.role)}`}>
-                {user?.role}
+                {getRoleDisplayName(user?.role)}
               </span>
             </div>
           </div>

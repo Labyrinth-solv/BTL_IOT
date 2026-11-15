@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { User, Role, UserStatus } from '../types';
+import { User, Role, UserStatus, getRoleDisplayName } from '../types';
 import {
   Users,
   UserPlus,
@@ -127,7 +127,7 @@ export const UsersPage: React.FC = () => {
             <span>Quản lý Tài khoản & Phân quyền RBAC</span>
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Thiết lập tài khoản người vận hành kho lương thực (Admin / Operator / Viewer)
+            Thiết lập tài khoản quản lý kho lương thực (Chủ kho / Vận hành / Giám sát QC)
           </p>
         </div>
 
@@ -196,7 +196,7 @@ export const UsersPage: React.FC = () => {
                       <td className="py-3.5 px-4 text-slate-300 font-mono text-[11px]">{u.email}</td>
                       <td className="py-3.5 px-4">
                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${getRoleBadge(u.role)}`}>
-                          {u.role}
+                          {getRoleDisplayName(u.role)}
                         </span>
                       </td>
                       <td className="py-3.5 px-4">
@@ -320,9 +320,9 @@ export const UsersPage: React.FC = () => {
                   onChange={(e) => setNewRole(e.target.value as Role)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 focus:outline-none focus:border-purple-500"
                 >
-                  <option value="OPERATOR">OPERATOR (Vận hành & Điều khiển Quạt)</option>
-                  <option value="VIEWER">VIEWER (Chỉ xem dữ liệu)</option>
-                  <option value="ADMIN">ADMIN (Quản trị toàn quyền)</option>
+                  <option value="OPERATOR">Vận hành / Operator (Điều khiển Quạt &amp; Ngưỡng)</option>
+                  <option value="VIEWER">Giám sát / QC (Chỉ xem dữ liệu)</option>
+                  <option value="ADMIN">Chủ kho / Admin (Quản trị toàn quyền)</option>
                 </select>
               </div>
 

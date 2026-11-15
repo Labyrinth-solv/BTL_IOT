@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 
 export const AlertsPage: React.FC = () => {
-  const { isViewer, showToast, user } = useAuth();
+  const { isAdmin, isViewer, showToast, user } = useAuth();
   const { recentAlerts: liveAlerts } = useSocket();
 
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -138,7 +138,10 @@ export const AlertsPage: React.FC = () => {
     }
   };
 
-  const getAlertIcon = (type: string) => {
+  const getAlertIcon = (type: string, message?: string) => {
+    if (message?.startsWith('[Lỗi cảm biến]')) {
+      return <AlertCircle className="w-4 h-4 text-rose-400 animate-pulse" />;
+    }
     switch (type) {
       case 'HIGH_HUMIDITY':
         return <Droplets className="w-4 h-4 text-sky-400" />;
@@ -223,23 +226,27 @@ export const AlertsPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          <button
-            onClick={() => handleClearAlerts(false)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition"
-            title="Dọn dẹp các cảnh báo đã xử lý xong để làm gọn danh sách"
-          >
-            <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Dọn cảnh báo đã xong</span>
-          </button>
+          {!isViewer && (
+            <button
+              onClick={() => handleClearAlerts(false)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition"
+              title="Dọn dẹp các cảnh báo đã xử lý xong để làm gọn danh sách"
+            >
+              <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Dọn cảnh báo đã xong</span>
+            </button>
+          )}
 
-          <button
-            onClick={() => handleClearAlerts(true)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-xs font-semibold border border-rose-500/30 transition"
-            title="Xóa toàn bộ tất cả cảnh báo để reset lại hệ thống"
-          >
-            <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-            <span>Xóa tất cả (Reset)</span>
-          </button>
+          {isAdmin && (
+            <button
+              onClick={() => handleClearAlerts(true)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-xs font-semibold border border-rose-500/30 transition"
+              title="Xóa toàn bộ tất cả cảnh báo để reset lại hệ thống"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+              <span>Xóa tất cả (Reset)</span>
+            </button>
+          )}
 
           <button
             onClick={fetchAlerts}
@@ -376,8 +383,8 @@ export const AlertsPage: React.FC = () => {
                   <div className="flex flex-wrap items-center gap-2">
                     {getSeverityBadge(alert.severity)}
                     <div className="flex items-center gap-1.5 font-semibold text-slate-200 text-xs px-2 py-0.5 rounded bg-slate-950 border border-slate-800">
-                      {getAlertIcon(alert.alert_type)}
-                      <span>{alert.alert_type}</span>
+                      {getAlertIcon(alert.alert_type, alert.message)}
+                      <span>{alert.message?.startsWith('[Lỗi cảm biến]') ? 'SENSOR_FAULT' : alert.alert_type}</span>
                     </div>
                     {getStatusBadge(alert.status)}
                     <span className="text-[11px] text-slate-400 font-mono flex items-center gap-1">
@@ -412,7 +419,7 @@ export const AlertsPage: React.FC = () => {
 
                   {/* Nút hành động SOP */}
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
-                    {isNew && (
+                    {!isViewer && isNew && (
                       <button
                         onClick={() => {
                           setAckModalAlert(alert);
@@ -425,7 +432,7 @@ export const AlertsPage: React.FC = () => {
                       </button>
                     )}
 
-                    {(isNew || isAck) && (
+                    {!isViewer && (isNew || isAck) && (
                       <button
                         onClick={() => {
                           setResolveModalAlert(alert);
@@ -445,14 +452,15 @@ export const AlertsPage: React.FC = () => {
                       </span>
                     )}
 
-                    {/* Nút xóa cảnh báo đơn lẻ */}
-                    <button
-                      onClick={(e) => handleDeleteAlert(alert.id, e)}
-                      title="Xóa cảnh báo này"
-                      className="p-2 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 transition"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    {!isViewer && (
+                      <button
+                        onClick={(e) => handleDeleteAlert(alert.id, e)}
+                        title="Xóa cảnh báo này"
+                        className="p-2 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 transition"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -516,8 +524,10 @@ export const AlertsPage: React.FC = () => {
                       <td className="py-3.5 px-3">{getSeverityBadge(alert.severity)}</td>
                       <td className="py-3.5 px-3">
                         <div className="flex items-center gap-1 font-semibold text-slate-300">
-                          {getAlertIcon(alert.alert_type)}
-                          <span className="truncate">{alert.alert_type}</span>
+                          {getAlertIcon(alert.alert_type, alert.message)}
+                          <span className="truncate">
+                            {alert.message?.startsWith('[Lỗi cảm biến]') ? 'SENSOR_FAULT' : alert.alert_type}
+                          </span>
                         </div>
                       </td>
                       <td className="py-3.5 px-3 max-w-xs break-words">
@@ -551,7 +561,7 @@ export const AlertsPage: React.FC = () => {
                       </td>
                       <td className="py-3.5 px-3 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1.5">
-                          {isNew && (
+                          {!isViewer && isNew && (
                             <button
                               onClick={() => {
                                 setAckModalAlert(alert);
@@ -564,7 +574,7 @@ export const AlertsPage: React.FC = () => {
                             </button>
                           )}
 
-                          {(isNew || isAck) && (
+                          {!isViewer && (isNew || isAck) && (
                             <button
                               onClick={() => {
                                 setResolveModalAlert(alert);
@@ -584,13 +594,19 @@ export const AlertsPage: React.FC = () => {
                             </span>
                           )}
 
-                          <button
-                            onClick={(e) => handleDeleteAlert(alert.id, e)}
-                            title="Xóa cảnh báo này"
-                            className="p-1 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 border border-slate-700 hover:border-rose-500/40 transition"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
+                          {!isViewer && (
+                            <button
+                              onClick={(e) => handleDeleteAlert(alert.id, e)}
+                              title="Xóa cảnh báo này"
+                              className="p-1 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 border border-slate-700 hover:border-rose-500/40 transition"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          )}
+
+                          {isViewer && !isResolved && (
+                            <span className="text-[11px] italic text-slate-500">Chỉ xem</span>
+                          )}
                         </div>
                       </td>
                     </tr>

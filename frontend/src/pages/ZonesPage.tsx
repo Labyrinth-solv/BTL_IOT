@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 
 export const ZonesPage: React.FC = () => {
-  const { isViewer, showToast } = useAuth();
+  const { isAdmin, showToast } = useAuth();
   const [zones, setZones] = useState<WarehouseZone[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -35,7 +35,7 @@ export const ZonesPage: React.FC = () => {
     try {
       const [zRes, uRes] = await Promise.all([
         api.getZones(),
-        api.getUsers().catch(() => ({ success: true, data: [] })),
+        isAdmin ? api.getUsers().catch(() => ({ success: true, data: [] })) : Promise.resolve({ success: true, data: [] }),
       ]);
 
       if (zRes.success) setZones(zRes.data);
@@ -110,13 +110,15 @@ export const ZonesPage: React.FC = () => {
             <span>Làm mới</span>
           </button>
 
-          <button
-            onClick={() => setIsModalOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition"
-          >
-            <Plus className="w-4 h-4 stroke-[2.5]" />
-            <span>Thêm Khu Vực Silo</span>
-          </button>
+          {isAdmin && (
+            <button
+              onClick={() => setIsModalOpen(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition"
+            >
+              <Plus className="w-4 h-4 stroke-[2.5]" />
+              <span>Thêm Khu Vực Silo</span>
+            </button>
+          )}
         </div>
       </div>
 

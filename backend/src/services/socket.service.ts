@@ -76,5 +76,14 @@ export class SocketService {
       this.io.emit('command_ack', data);
     }
   }
+
+  /**
+   * Broadcast unregistered ESP32 node discovered on MQTT
+   */
+  static emitDeviceDiscovered(data: any): void {
+    if (this.io) {
+      this.io.emit('device_discovered', data);
+    }
+  }
 }
 

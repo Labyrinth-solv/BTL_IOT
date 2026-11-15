@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
+import { useSocket } from './context/SocketContext';
+import { api } from './services/api';
 import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
 import { SimulatorDrawer } from './components/SimulatorDrawer';
@@ -19,8 +21,50 @@ import { AuditLogsPage } from './pages/AuditLogsPage';
 // Protected Layout
 const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, isLoading } = useAuth();
+  const { deviceStatus, latestTelemetry } = useSocket();
   const [isSimulatorOpen, setIsSimulatorOpen] = useState(false);
+  const [isSimulatorRunning, setIsSimulatorRunning] = useState(false);
+  const [hasDbOnlineDevice, setHasDbOnlineDevice] = useState(false);
   const location = useLocation();
+
+  useEffect(() => {
+    if (!user) return;
+
+    let cancelled = false;
+    const checkEnvironment = async () => {
+      try {
+        const [simRes, devRes] = await Promise.all([
+          api.getSimulatorStatus().catch(() => null),
+          api.getDevices().catch(() => null),
+        ]);
+        if (cancelled) return;
+
+        const running = Boolean(simRes?.isRunning);
+        setIsSimulatorRunning(running);
+        if (!running) {
+          setIsSimulatorOpen(false);
+        }
+
+        if (devRes?.success && Array.isArray(devRes.data)) {
+          setHasDbOnlineDevice(devRes.data.some((d: any) => d.is_online));
+        }
+      } catch {
+        if (!cancelled) setIsSimulatorRunning(false);
+      }
+    };
+
+    checkEnvironment();
+    const timer = setInterval(checkEnvironment, 8000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [user]);
+
+  const hasWsOnlineDevice =
+    Object.values(deviceStatus).some((s) => s.state === 'ONLINE') ||
+    Object.keys(latestTelemetry).some((code) => deviceStatus[code]?.state !== 'OFFLINE');
+  const isRealDeviceMode = !isSimulatorRunning && (hasDbOnlineDevice || hasWsOnlineDevice);
 
   if (isLoading) {
     return (
@@ -43,6 +87,8 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       <Navbar
         isSimulatorOpen={isSimulatorOpen}
         onToggleSimulator={() => setIsSimulatorOpen((prev) => !prev)}
+        showSimulator={isSimulatorRunning}
+        isRealDeviceMode={isRealDeviceMode}
       />
 
       {/* Main Content Area */}
@@ -56,10 +102,12 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         </main>
 
         {/* Hardware Simulator Drawer */}
-        <SimulatorDrawer
-          isOpen={isSimulatorOpen}
-          onClose={() => setIsSimulatorOpen(false)}
-        />
+        {isSimulatorRunning && (
+          <SimulatorDrawer
+            isOpen={isSimulatorOpen}
+            onClose={() => setIsSimulatorOpen(false)}
+          />
+        )}
       </div>
 
       {/* Floating System Toast */}

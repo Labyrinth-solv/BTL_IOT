@@ -8,9 +8,80 @@ import { TelegramService } from './telegram.service';
 import { AuditService } from './audit.service';
 import { LifecycleState, CommandStatus, AlertType, AlertSeverity } from '@prisma/client';
 
+export interface DeviceDiagnostics {
+  sensor_health: any;
+  door_open?: boolean;
+  control_mode?: string;
+  ip_address?: string;
+  mac_address?: string;
+  chip_id?: string;
+  rssi?: number;
+  fw_version?: string;
+  hw_version?: string;
+  updated_at: number;
+}
+
+export interface UnregisteredNodeInfo {
+  device_code: string;
+  ip_address?: string;
+  mac_address?: string;
+  chip_id?: string;
+  rssi?: number;
+  fw_version?: string;
+  hw_version?: string;
+  sensor_health?: any;
+  first_seen_at: number;
+  last_seen_at: number;
+  last_channel: 'telemetry' | 'status';
+}
+
 export class MQTTService {
   private static client: MqttClient | null = null;
   private static pendingCommandTimers: Map<string, NodeJS.Timeout> = new Map();
+  private static deviceDiagnostics: Map<string, DeviceDiagnostics> = new Map();
+  private static unregisteredNodes: Map<string, UnregisteredNodeInfo> = new Map();
+
+  static getDeviceDiagnostics(deviceCode: string): DeviceDiagnostics | null {
+    return this.deviceDiagnostics.get(deviceCode) || null;
+  }
+
+  static clearDeviceDiagnostics(deviceCode: string): void {
+    this.deviceDiagnostics.delete(deviceCode);
+  }
+
+  static getDiscoveredNodes(): UnregisteredNodeInfo[] {
+    return Array.from(this.unregisteredNodes.values()).sort(
+      (a, b) => b.last_seen_at - a.last_seen_at
+    );
+  }
+
+  static removeDiscoveredNode(deviceCode: string): void {
+    this.unregisteredNodes.delete(deviceCode);
+  }
+
+  private static recordUnregisteredNode(
+    deviceCode: string,
+    payload: any,
+    channel: 'telemetry' | 'status'
+  ): void {
+    const prev = this.unregisteredNodes.get(deviceCode);
+    const now = Date.now();
+    const info: UnregisteredNodeInfo = {
+      device_code: deviceCode,
+      ip_address: payload?.ip_address || prev?.ip_address,
+      mac_address: payload?.mac_address || prev?.mac_address,
+      chip_id: payload?.chip_id || prev?.chip_id,
+      rssi: typeof payload?.rssi === 'number' ? payload.rssi : prev?.rssi,
+      fw_version: payload?.fw_version || prev?.fw_version,
+      hw_version: payload?.hw_version || prev?.hw_version,
+      sensor_health: payload?.sensor_health || prev?.sensor_health,
+      first_seen_at: prev?.first_seen_at || now,
+      last_seen_at: now,
+      last_channel: channel,
+    };
+    this.unregisteredNodes.set(deviceCode, info);
+    SocketService.emitDeviceDiscovered(info);
+  }
 
   /**
    * Khởi động MQTT Ingestion Worker
@@ -115,6 +186,7 @@ export class MQTTService {
 
     if (!device) {
       console.warn(`[MQTTService] Telemetry từ thiết bị chưa đăng ký: ${deviceCode}`);
+      this.recordUnregisteredNode(deviceCode, payload, 'telemetry');
       return;
     }
 
@@ -172,16 +244,92 @@ export class MQTTService {
 
     const estimatedEmc = metrics.estimated_emc?.value ?? EMCService.calculate(temp, rh);
 
-    // E. Đánh giá qua Rule Engine
+    // D2. Trích xuất trạng thái nhận diện cảm biến (sensor_health), module đang bật/tắt & cửa kho
+    const cfg = (device.config_json as any) || {};
+    const periph = cfg.peripherals || {};
+    const ahtEnabled = periph.aht20_enabled !== false;
+    const mqEnabled = periph.mq135_enabled !== false;
+    const doorEnabled = periph.door_enabled !== false;
+    const fanEnabled = periph.fan_enabled !== false;
+    const fanAuto = periph.fan_auto !== false;
+    const buzzerEnabled = periph.buzzer_enabled !== false;
+    const buzzerAuto = periph.buzzer_auto !== false;
+
+    const rawHealth = payload.sensor_health || null;
+    const aht20Disabled = !ahtEnabled || rawHealth?.aht20?.status === 'DISABLED';
+    const mq135Disabled = !mqEnabled || rawHealth?.mq135?.status === 'DISABLED';
+
+    const aht20Ok: boolean = !aht20Disabled && (rawHealth?.aht20?.ok ?? true);
+    const mq135Ok: boolean = !mq135Disabled && (rawHealth?.mq135?.ok ?? true);
+    const doorOpen: boolean = doorEnabled
+      ? metrics.door_sensor?.is_open ??
+        (actuators?.door_state === 'OPEN' || actuators?.door_open === 'OPEN')
+      : false;
+
+    const normalizedHealth = rawHealth
+      ? {
+          ...rawHealth,
+          aht20: rawHealth.aht20
+            ? {
+                ...rawHealth.aht20,
+                enabled: ahtEnabled,
+                ok: aht20Ok,
+                status: !ahtEnabled ? 'DISABLED' : rawHealth.aht20.status,
+              }
+            : undefined,
+          mq135: rawHealth.mq135
+            ? {
+                ...rawHealth.mq135,
+                enabled: mqEnabled,
+                ok: mq135Ok,
+                status: !mqEnabled ? 'DISABLED' : rawHealth.mq135.status,
+              }
+            : undefined,
+          door_sensor: rawHealth.door_sensor
+            ? {
+                ...rawHealth.door_sensor,
+                enabled: doorEnabled,
+                ok: doorEnabled,
+                status: !doorEnabled ? 'DISABLED' : rawHealth.door_sensor.status,
+              }
+            : undefined,
+          fault_count:
+            (aht20Disabled || aht20Ok ? 0 : 1) + (mq135Disabled || mq135Ok ? 0 : 1),
+          updated_at: Date.now(),
+        }
+      : null;
+
+    const prevDiag = this.deviceDiagnostics.get(deviceCode);
+    const resolvedIp = payload.ip_address || prevDiag?.ip_address;
+    const resolvedMac = payload.mac_address || prevDiag?.mac_address;
+    const resolvedChipId = payload.chip_id || prevDiag?.chip_id;
+    const resolvedRssi = typeof payload.rssi === 'number' ? payload.rssi : prevDiag?.rssi;
+
+    this.deviceDiagnostics.set(deviceCode, {
+      sensor_health: normalizedHealth,
+      door_open: doorOpen,
+      control_mode: actuators?.control_mode || 'AUTO',
+      ip_address: resolvedIp,
+      mac_address: resolvedMac,
+      chip_id: resolvedChipId,
+      rssi: resolvedRssi,
+      fw_version: payload.fw_version || prevDiag?.fw_version,
+      hw_version: payload.hw_version || prevDiag?.hw_version,
+      updated_at: Date.now(),
+    });
+
+    // E. Đánh giá qua Rule Engine (chỉ tính ngưỡng trên cảm biến đang bật & hoạt động bình thường)
     const ruleResult = RuleEngineService.evaluate({
       temperature: temp,
       humidity_air: rh,
       gas_ppm: gas,
       estimated_emc: estimatedEmc,
       custom_config: device.config_json,
+      aht20_ok: aht20Ok,
+      mq135_ok: mq135Ok,
     });
 
-    const isFanOn = actuators?.fan_state === 'ON' || ruleResult.should_turn_on_fan;
+    const isFanOn = fanEnabled && (actuators?.fan_state === 'ON' || (fanAuto && ruleResult.should_turn_on_fan));
 
     // F. Lưu vào bảng telemetry_logs
     const telemetryRecord = await prisma.telemetryLog.create({
@@ -256,9 +404,14 @@ export class MQTTService {
       }
     }
 
+    // H2. Tạo / Tự động đóng cảnh báo lỗi phần cứng cảm biến nếu có sensor_health
+    if (normalizedHealth) {
+      await this.handleSensorHealthAlerts(device, deviceCode, normalizedHealth);
+    }
+
     // I. Tự động điều khiển quạt ở chế độ AUTO khi vượt ngưỡng hoặc khi trở lại an toàn
-    const controlMode = actuators?.control_mode || 'AUTO';
-    if (controlMode === 'AUTO') {
+    const controlMode = actuators?.control_mode || (fanAuto ? 'AUTO' : 'MANUAL');
+    if (fanEnabled && fanAuto && controlMode === 'AUTO') {
       if (ruleResult.should_turn_on_fan && actuators?.fan_state !== 'ON') {
         console.log(`⚡ [RuleEngine Auto-Fan] Tự động phát lệnh BẬT QUẠT cho thiết bị ${deviceCode} (Vi phạm ngưỡng vi khí hậu)`);
         await this.publishCommand(device.id, deviceCode, 'ACTUATOR_CONTROL', {
@@ -277,6 +430,10 @@ export class MQTTService {
       }
     }
 
+    const isBuzzerOn =
+      buzzerEnabled &&
+      (actuators?.buzzer_state === 'ON' || (buzzerAuto && ruleResult.risk_level === 'HIGH_RISK'));
+
     // J. Đẩy dữ liệu thời gian thực qua WebSocket lên Dashboard
     SocketService.emitTelemetry({
       device_id: deviceCode,
@@ -287,7 +444,14 @@ export class MQTTService {
       gas_ppm: gas,
       estimated_emc: estimatedEmc,
       fan_state: isFanOn ? 'ON' : 'OFF',
-      buzzer_state: ruleResult.risk_level === 'HIGH_RISK' ? 'ON' : 'OFF',
+      buzzer_state: isBuzzerOn ? 'ON' : 'OFF',
+      door_open: doorOpen,
+      control_mode: controlMode,
+      sensor_health: normalizedHealth,
+      ip_address: resolvedIp,
+      mac_address: resolvedMac,
+      chip_id: resolvedChipId,
+      rssi: resolvedRssi,
       risk_level: ruleResult.risk_level,
       timestamp: Date.now(),
     });
@@ -298,8 +462,135 @@ export class MQTTService {
       state: 'ONLINE',
       lifecycle_state: updatedLifecycle,
       is_online: true,
+      ip_address: resolvedIp,
+      mac_address: resolvedMac,
+      chip_id: resolvedChipId,
+      rssi: resolvedRssi,
       last_seen_at: new Date().toISOString(),
     });
+  }
+
+  /**
+   * Tự động tạo hoặc đóng cảnh báo khi phát hiện cảm biến không nhận diện được / kết nối lại
+   */
+  private static async handleSensorHealthAlerts(
+    device: any,
+    deviceCode: string,
+    sensorHealth: any
+  ): Promise<void> {
+    const failures: string[] = [];
+
+    if (
+      sensorHealth.aht20 &&
+      sensorHealth.aht20.enabled !== false &&
+      sensorHealth.aht20.status !== 'DISABLED' &&
+      sensorHealth.aht20.ok === false
+    ) {
+      failures.push(
+        `AHT20 (${sensorHealth.aht20.status || 'ERROR'}): ${
+          sensorHealth.aht20.message || 'Không nhận diện được cảm biến nhiệt ẩm I2C 0x38'
+        }`
+      );
+    }
+
+    if (
+      sensorHealth.mq135 &&
+      sensorHealth.mq135.enabled !== false &&
+      sensorHealth.mq135.status !== 'DISABLED' &&
+      sensorHealth.mq135.ok === false
+    ) {
+      const adcInfo =
+        sensorHealth.mq135.raw_adc !== undefined ? `, ADC=${sensorHealth.mq135.raw_adc}` : '';
+      failures.push(
+        `MQ-135 (${sensorHealth.mq135.status || 'ERROR'}${adcInfo}): ${
+          sensorHealth.mq135.message || 'Không nhận diện được tín hiệu cảm biến gas'
+        }`
+      );
+    }
+
+    const prefix = `[Lỗi cảm biến] ${deviceCode}`;
+
+    if (failures.length > 0) {
+      const fullMessage = `${prefix}: ${failures.join(' | ')}`;
+
+      const activeAlert = await prisma.alert.findFirst({
+        where: {
+          device_id: device.id,
+          alert_type: AlertType.DEVICE_OFFLINE,
+          status: { in: ['NEW', 'ACKNOWLEDGED'] },
+          message: { startsWith: prefix },
+        },
+        orderBy: { created_at: 'desc' },
+      });
+
+      if (!activeAlert) {
+        const recentResolvedWindow = new Date(Date.now() - 2 * 60 * 1000);
+        const recentlyResolved = await prisma.alert.findFirst({
+          where: {
+            device_id: device.id,
+            alert_type: AlertType.DEVICE_OFFLINE,
+            message: { startsWith: prefix },
+            created_at: { gte: recentResolvedWindow },
+          },
+        });
+
+        if (!recentlyResolved) {
+          console.warn(`⚠️ [SensorHealth] ${fullMessage}`);
+          const sensorAlert = await prisma.alert.create({
+            data: {
+              device_id: device.id,
+              zone_id: device.zone_id,
+              alert_type: AlertType.DEVICE_OFFLINE,
+              severity: AlertSeverity.CRITICAL,
+              message: fullMessage,
+              trigger_value: failures.length,
+            },
+            include: {
+              device: { select: { device_code: true, name: true } },
+              zone: { select: { name: true } },
+            },
+          });
+          SocketService.emitNewAlert(sensorAlert);
+        }
+      } else if (activeAlert.status === 'NEW' && activeAlert.message !== fullMessage) {
+        const updatedAlert = await prisma.alert.update({
+          where: { id: activeAlert.id },
+          data: { message: fullMessage, trigger_value: failures.length },
+          include: {
+            device: { select: { device_code: true, name: true } },
+            zone: { select: { name: true } },
+          },
+        });
+        SocketService.emitAlertUpdate(updatedAlert);
+      }
+      return;
+    }
+
+    // Tất cả cảm biến đều OK -> tự động đóng cảnh báo lỗi cảm biến đang mở (NEW)
+    const openSensorAlerts = await prisma.alert.findMany({
+      where: {
+        device_id: device.id,
+        alert_type: AlertType.DEVICE_OFFLINE,
+        status: 'NEW',
+        message: { startsWith: prefix },
+      },
+    });
+
+    for (const openAlert of openSensorAlerts) {
+      const resolved = await prisma.alert.update({
+        where: { id: openAlert.id },
+        data: {
+          status: 'RESOLVED',
+          resolved_at: new Date(),
+          ack_note: 'Cảm biến đã được nhận diện lại bình thường',
+        },
+        include: {
+          device: { select: { device_code: true, name: true } },
+          zone: { select: { name: true } },
+        },
+      });
+      SocketService.emitAlertUpdate(resolved);
+    }
   }
 
   /**
@@ -313,7 +604,13 @@ export class MQTTService {
       include: { zone: true },
     });
 
-    if (!device) return;
+    if (!device) {
+      if (state !== 'OFFLINE') {
+        console.warn(`[MQTTService] Heartbeat từ thiết bị chưa đăng ký: ${deviceCode}`);
+        this.recordUnregisteredNode(deviceCode, payload, 'status');
+      }
+      return;
+    }
 
     if (state === 'OFFLINE') {
       console.warn(`⚠️ [MQTTService] Thiết bị OFFLINE qua LWT: ${deviceCode} (Lý do: ${reason || 'Mất kết nối'})`);
@@ -351,6 +648,25 @@ export class MQTTService {
         lifecycle_state: LifecycleState.OFFLINE,
       });
     } else if (state === 'ONLINE') {
+      const prevDiag = this.deviceDiagnostics.get(deviceCode);
+      const resolvedIp = payload.ip_address || prevDiag?.ip_address;
+      const resolvedMac = payload.mac_address || prevDiag?.mac_address;
+      const resolvedChipId = payload.chip_id || prevDiag?.chip_id;
+      const resolvedRssi = typeof payload.rssi === 'number' ? payload.rssi : prevDiag?.rssi;
+
+      this.deviceDiagnostics.set(deviceCode, {
+        sensor_health: prevDiag?.sensor_health ?? null,
+        door_open: prevDiag?.door_open,
+        control_mode: prevDiag?.control_mode,
+        ip_address: resolvedIp,
+        mac_address: resolvedMac,
+        chip_id: resolvedChipId,
+        rssi: resolvedRssi,
+        fw_version: fw_version || prevDiag?.fw_version,
+        hw_version: hw_version || prevDiag?.hw_version,
+        updated_at: Date.now(),
+      });
+
       await prisma.device.update({
         where: { id: device.id },
         data: {
@@ -369,6 +685,10 @@ export class MQTTService {
         is_online: true,
         fw_version: fw_version || device.fw_version,
         hw_version: hw_version || device.hw_version,
+        ip_address: resolvedIp,
+        mac_address: resolvedMac,
+        chip_id: resolvedChipId,
+        rssi: resolvedRssi,
         last_seen_at: new Date().toISOString(),
       });
     } else if (state === 'FAULT') {

@@ -28,9 +28,13 @@ export const SimulatorDrawer: React.FC<SimulatorDrawerProps> = ({ isOpen, onClos
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>('Bộ giả lập đang chạy chế độ: NORMAL (An toàn)');
 
-  // Tra cứu dữ liệu thời gian thực của DEV_SILO_01
-  const dev01Data = latestTelemetry['DEV_SILO_01'];
-  const dev01Status = deviceStatus['DEV_SILO_01'];
+  // Tra cứu động dữ liệu thời gian thực (ưu tiên node đang online hoặc DEV_SILO_01)
+  const activeDeviceCode =
+    latestTelemetry['DEV_SILO_01']
+      ? 'DEV_SILO_01'
+      : Object.keys(latestTelemetry)[0] || Object.keys(deviceStatus)[0] || 'DEV_SILO_01';
+  const dev01Data = latestTelemetry[activeDeviceCode];
+  const dev01Status = deviceStatus[activeDeviceCode];
 
   useEffect(() => {
     const fetchStatus = async () => {
@@ -115,7 +119,7 @@ export const SimulatorDrawer: React.FC<SimulatorDrawerProps> = ({ isOpen, onClos
           {/* Device Realtime Status Preview */}
           <div className="p-4 bg-slate-950/40 border-b border-slate-800/80">
             <div className="flex items-center justify-between text-xs mb-2">
-              <span className="text-slate-400 font-medium">Thiết bị mẫu: DEV_SILO_01</span>
+              <span className="text-slate-400 font-medium">Thiết bị theo dõi: {activeDeviceCode}</span>
               <span
                 className={`inline-flex items-center gap-1 font-semibold px-2 py-0.5 rounded text-[10px] ${
                   dev01Status?.state === 'OFFLINE'

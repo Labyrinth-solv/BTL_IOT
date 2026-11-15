@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { Device, WarehouseZone } from '../types';
+import { useSocket } from '../context/SocketContext';
+import { Device, DiscoveredDevice, WarehouseZone } from '../types';
 import { LifecycleBadge } from '../components/LifecycleBadge';
 import {
   Plus,
@@ -21,14 +22,22 @@ import {
   ShieldAlert,
   LayoutList,
   Table,
+  Pencil,
+  PlayCircle,
+  KeyRound,
+  Radio,
+  Wifi,
+  X,
 } from 'lucide-react';
 
 export const DevicesPage: React.FC = () => {
   const navigate = useNavigate();
-  const { isViewer, showToast } = useAuth();
+  const { isAdmin, isViewer, showToast } = useAuth();
+  const { latestTelemetry, deviceStatus, discoveredDevices: socketDiscovered, removeDiscoveredDevice } = useSocket();
 
   const [devices, setDevices] = useState<Device[]>([]);
   const [zones, setZones] = useState<WarehouseZone[]>([]);
+  const [apiDiscovered, setApiDiscovered] = useState<DiscoveredDevice[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [stateFilter, setStateFilter] = useState<string>('ALL');
@@ -39,11 +48,23 @@ export const DevicesPage: React.FC = () => {
   const [newDeviceCode, setNewDeviceCode] = useState('');
   const [newDeviceName, setNewDeviceName] = useState('');
   const [newZoneId, setNewZoneId] = useState('');
-  const [newFwVersion, setNewFwVersion] = useState('1.0.0');
-  const [newHwVersion, setNewHwVersion] = useState('ESP32-WROOM-32');
+  const [newFwVersion, setNewFwVersion] = useState('1.1.1');
+  const [newHwVersion, setNewHwVersion] = useState('ESP32-WROOM-32D-v2');
   const [isSubmittingOnboard, setIsSubmittingOnboard] = useState(false);
   const [generatedToken, setGeneratedToken] = useState<string | null>(null);
   const [hasCopiedToken, setHasCopiedToken] = useState(false);
+
+  // Modal Edit Device
+  const [editModalDevice, setEditModalDevice] = useState<Device | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editZoneId, setEditZoneId] = useState('');
+  const [editFwVersion, setEditFwVersion] = useState('');
+  const [editHwVersion, setEditHwVersion] = useState('');
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
+
+  // Modal Rotate Token
+  const [rotatedTokenInfo, setRotatedTokenInfo] = useState<{ deviceCode: string; token: string } | null>(null);
+  const [hasCopiedRotatedToken, setHasCopiedRotatedToken] = useState(false);
 
   // Modal Suspend
   const [suspendModalDevice, setSuspendModalDevice] = useState<Device | null>(null);
@@ -53,11 +74,15 @@ export const DevicesPage: React.FC = () => {
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      const [devRes, zoneRes] = await Promise.all([
+      const [devRes, zoneRes, discRes] = await Promise.all([
         api.getDevices(),
         api.getZones(),
+        api.getDiscoveredDevices().catch(() => ({ success: false, data: [] })),
       ]);
       if (devRes.success) setDevices(devRes.data);
+      if (discRes?.success && Array.isArray(discRes.data)) {
+        setApiDiscovered(discRes.data);
+      }
       if (zoneRes.success) {
         setZones(zoneRes.data);
         if (zoneRes.data.length > 0 && !newZoneId) {
@@ -82,10 +107,11 @@ export const DevicesPage: React.FC = () => {
       return;
     }
 
+    const codeNormalized = newDeviceCode.trim().toUpperCase();
     setIsSubmittingOnboard(true);
     try {
       const res = await api.onboardDevice({
-        device_code: newDeviceCode.trim().toUpperCase(),
+        device_code: codeNormalized,
         name: newDeviceName.trim(),
         zone_id: newZoneId,
         fw_version: newFwVersion,
@@ -93,8 +119,10 @@ export const DevicesPage: React.FC = () => {
       });
 
       if (res.success && res.data) {
-        setGeneratedToken(res.data.secret_token);
-        showToast('Onboard thiết bị thành công! Lưu ý sao lưu Secret Token.', 'success');
+        removeDiscoveredDevice(codeNormalized);
+        setApiDiscovered((prev) => prev.filter((n) => n.device_code !== codeNormalized));
+        closeOnboardModal();
+        showToast(`Đã đăng ký thiết bị ${codeNormalized} thành công!`, 'success');
         fetchData();
       }
     } catch (err: any) {
@@ -180,11 +208,123 @@ export const DevicesPage: React.FC = () => {
     }
   };
 
+  const handleActivate = async (device: Device) => {
+    try {
+      const res = await api.activateDevice(device.id);
+      if (res.success) {
+        showToast(`Đã kích hoạt thiết bị ${device.device_code} sang trạng thái ACTIVE`, 'success');
+        fetchData();
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Lỗi kích hoạt thiết bị', 'error');
+    }
+  };
+
+  const openEditModal = (device: Device) => {
+    setEditModalDevice(device);
+    setEditName(device.name);
+    setEditZoneId(device.zone_id);
+    setEditFwVersion(device.fw_version || '1.1.1');
+    setEditHwVersion(device.hw_version || 'ESP32-WROOM-32D-v2');
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editModalDevice || !editName.trim() || !editZoneId) {
+      showToast('Tên thiết bị và khu vực không được để trống!', 'warning');
+      return;
+    }
+    setIsSubmittingEdit(true);
+    try {
+      const res = await api.updateDevice(editModalDevice.id, {
+        name: editName.trim(),
+        zone_id: editZoneId,
+        fw_version: editFwVersion.trim(),
+        hw_version: editHwVersion.trim(),
+      });
+      if (res.success) {
+        showToast(`Đã cập nhật thông tin ${editModalDevice.device_code}`, 'success');
+        setEditModalDevice(null);
+        fetchData();
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Lỗi cập nhật thiết bị', 'error');
+    } finally {
+      setIsSubmittingEdit(false);
+    }
+  };
+
+  const handleRotateToken = async (device: Device) => {
+    if (
+      !window.confirm(
+        `Cấp lại Secret Token mới cho ${device.device_code}? Token cũ (nếu dùng HTTP Auth) sẽ hết hiệu lực ngay lập tức.`
+      )
+    ) {
+      return;
+    }
+    try {
+      const res = await api.rotateDeviceToken(device.id);
+      if (res.success && res.data?.secret_token) {
+        setRotatedTokenInfo({ deviceCode: device.device_code, token: res.data.secret_token });
+        setHasCopiedRotatedToken(false);
+        showToast(`Đã cấp lại token mới cho ${device.device_code}`, 'success');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Lỗi cấp lại token', 'error');
+    }
+  };
+
+  const handleDeletePermanent = async (device: Device) => {
+    if (
+      !window.confirm(
+        `XÓA HẲN THIẾT BỊ ${device.device_code} (${device.name})?\nToàn bộ lịch sử đo, cảnh báo và lệnh điều khiển của node này sẽ bị xóa khỏi CSDL!`
+      )
+    ) {
+      return;
+    }
+    try {
+      const res = await api.deleteDevice(device.id);
+      if (res.success) {
+        showToast(`Đã xóa vĩnh viễn thiết bị ${device.device_code}`, 'success');
+        fetchData();
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Lỗi xóa thiết bị', 'error');
+    }
+  };
+
+  const handleQuickOnboardDiscovered = (node: DiscoveredDevice) => {
+    setGeneratedToken(null);
+    setNewDeviceCode(node.device_code);
+    setNewDeviceName(`Node Silo ${node.device_code}`);
+    setNewFwVersion(node.fw_version || '1.1.1');
+    setNewHwVersion(node.hw_version || 'ESP32-WROOM-32D-v2');
+    if (zones.length > 0 && !newZoneId) {
+      setNewZoneId(zones[0].id);
+    }
+    setIsOnboardModalOpen(true);
+  };
+
+  // Gộp danh sách ESP32 vừa phát hiện qua API & Socket, bỏ những node đã tồn tại trong DB
+  const registeredCodes = new Set(devices.map((d) => d.device_code));
+  const discoveredMap = new Map<string, DiscoveredDevice>();
+  apiDiscovered.forEach((n) => {
+    if (!registeredCodes.has(n.device_code)) discoveredMap.set(n.device_code, n);
+  });
+  Object.values(socketDiscovered).forEach((n) => {
+    if (!registeredCodes.has(n.device_code)) discoveredMap.set(n.device_code, n);
+  });
+  const discoveredList = Array.from(discoveredMap.values()).sort(
+    (a, b) => b.last_seen_at - a.last_seen_at
+  );
+
   // Filtered devices
   const filteredDevices = devices.filter((dev) => {
     const matchesSearch =
       dev.device_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
       dev.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (dev.ip_address && dev.ip_address.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (dev.mac_address && dev.mac_address.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (dev.zone?.name && dev.zone.name.toLowerCase().includes(searchTerm.toLowerCase()));
 
     const matchesState = stateFilter === 'ALL' || dev.lifecycle_state === stateFilter;
@@ -215,15 +355,72 @@ export const DevicesPage: React.FC = () => {
             <span>Làm mới</span>
           </button>
 
-          <button
-            onClick={() => setIsOnboardModalOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition"
-          >
-            <Plus className="w-4 h-4 stroke-[2.5]" />
-            <span>Onboard Thiết bị Mới</span>
-          </button>
+          {isAdmin && (
+            <button
+              onClick={() => setIsOnboardModalOpen(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition"
+            >
+              <Plus className="w-4 h-4 stroke-[2.5]" />
+              <span>Onboard Thiết bị Mới</span>
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Auto-Discovered ESP32 Banner (Node đã kết nối MQTT nhưng chưa đăng ký vào DB) */}
+      {discoveredList.length > 0 && (
+        <div className="bg-amber-500/10 border border-amber-500/40 rounded-2xl p-4 space-y-3 shadow-lg">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-amber-300 font-bold text-sm">
+              <Radio className="w-4 h-4 text-amber-400 animate-pulse" />
+              <span>
+                Phát hiện {discoveredList.length} thiết bị ESP32 mới đang gửi MQTT nhưng chưa đăng ký
+              </span>
+            </div>
+            <span className="text-[11px] text-amber-200/80">
+              {isAdmin
+                ? 'Bấm "Thêm ngay" để gán vào khu vực kho và bắt đầu theo dõi'
+                : 'Liên hệ Admin để duyệt và thêm node mới vào kho'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+            {discoveredList.map((node) => (
+              <div
+                key={node.device_code}
+                className="bg-slate-950/70 border border-amber-500/30 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3"
+              >
+                <div className="space-y-1 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-bold text-amber-300 text-sm">
+                      {node.device_code}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                      Đang phát {node.last_channel}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-400 font-mono flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                    {node.ip_address && <span>IP: {node.ip_address}</span>}
+                    {node.mac_address && <span>MAC: {node.mac_address}</span>}
+                    {node.chip_id && <span>Chip: {node.chip_id}</span>}
+                    {node.fw_version && <span>FW: v{node.fw_version}</span>}
+                  </div>
+                </div>
+
+                {isAdmin && (
+                  <button
+                    onClick={() => handleQuickOnboardDiscovered(node)}
+                    className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Thêm ngay (Onboard)</span>
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Filter and Search Bar */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
@@ -297,9 +494,18 @@ export const DevicesPage: React.FC = () => {
             </div>
           ) : (
             filteredDevices.map((dev) => {
+              const wsStatus = deviceStatus[dev.device_code];
+              const wsTelemetry = latestTelemetry[dev.device_code];
+              const liveOnline = wsStatus ? wsStatus.state !== 'OFFLINE' : dev.is_online;
+              const liveIp = wsTelemetry?.ip_address ?? wsStatus?.ip_address ?? dev.ip_address;
+              const liveMac = wsTelemetry?.mac_address ?? wsStatus?.mac_address ?? dev.mac_address;
+              const liveRssi = wsTelemetry?.rssi ?? wsStatus?.rssi ?? dev.rssi;
+
               const isSuspended = dev.lifecycle_state === 'SUSPENDED';
               const isDecommissioned = dev.lifecycle_state === 'DECOMMISSIONED';
               const isMaintenance = dev.lifecycle_state === 'MAINTENANCE';
+              const needsActivation =
+                dev.lifecycle_state === 'REGISTERED' || dev.lifecycle_state === 'PROVISIONED';
 
               return (
                 <div
@@ -318,24 +524,30 @@ export const DevicesPage: React.FC = () => {
                       <LifecycleBadge state={dev.lifecycle_state} />
                     </div>
 
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-2">
+                      {typeof liveRssi === 'number' && liveOnline && (
+                        <span className="text-[11px] font-mono text-slate-400 flex items-center gap-1">
+                          <Wifi className="w-3 h-3 text-emerald-400" />
+                          {liveRssi} dBm
+                        </span>
+                      )}
                       <span
                         className={`w-2 h-2 rounded-full ${
-                          dev.is_online ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'
+                          liveOnline ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'
                         }`}
                       />
                       <span
                         className={`text-xs font-semibold ${
-                          dev.is_online ? 'text-emerald-400' : 'text-rose-400'
+                          liveOnline ? 'text-emerald-400' : 'text-rose-400'
                         }`}
                       >
-                        {dev.is_online ? 'ONLINE' : 'OFFLINE'}
+                        {liveOnline ? 'ONLINE' : 'OFFLINE'}
                       </span>
                     </div>
                   </div>
 
-                  {/* Hàng 2: Thông tin vị trí kho, phần cứng, gói tin cuối */}
-                  <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5 text-xs text-slate-400 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/60">
+                  {/* Hàng 2: Thông tin vị trí kho, phần cứng, định danh mạng, gói tin cuối */}
+                  <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs text-slate-400 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/60">
                     <div>
                       <span className="text-slate-500">Khu vực: </span>
                       <span className="text-slate-200 font-medium">
@@ -348,6 +560,16 @@ export const DevicesPage: React.FC = () => {
                         v{dev.fw_version} | {dev.hw_version}
                       </span>
                     </div>
+                    {(liveIp || liveMac) && (
+                      <div>
+                        <span className="text-slate-500">Định danh mạch: </span>
+                        <span className="font-mono text-sky-300">
+                          {liveIp ? `IP ${liveIp}` : ''}
+                          {liveIp && liveMac ? ' | ' : ''}
+                          {liveMac ? `MAC ${liveMac}` : ''}
+                        </span>
+                      </div>
+                    )}
                     <div>
                       <span className="text-slate-500">Gói tin gần nhất: </span>
                       <span className="text-slate-300">
@@ -372,45 +594,82 @@ export const DevicesPage: React.FC = () => {
                       <span>Xem chi tiết vi khí hậu &amp; Điều khiển</span>
                     </button>
 
-                    {!isDecommissioned && (
+                    {!isViewer && (
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <button
-                          onClick={() => handleToggleMaintenance(dev)}
-                          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition ${
-                            isMaintenance
-                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
-                              : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
-                          }`}
-                        >
-                          <Wrench className="w-3.5 h-3.5" />
-                          <span>{isMaintenance ? 'Tắt bảo trì' : 'Bật bảo trì'}</span>
-                        </button>
-
-                        {isSuspended ? (
+                        {needsActivation && (
                           <button
-                            onClick={() => handleUnsuspend(dev)}
+                            onClick={() => handleActivate(dev)}
                             className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 text-xs font-semibold transition"
                           >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                            <span>Mở đình chỉ</span>
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => setSuspendModalDevice(dev)}
-                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 text-xs font-semibold transition"
-                          >
-                            <Ban className="w-3.5 h-3.5" />
-                            <span>Đình chỉ</span>
+                            <PlayCircle className="w-3.5 h-3.5" />
+                            <span>Kích hoạt</span>
                           </button>
                         )}
 
                         <button
-                          onClick={() => handleDecommission(dev)}
-                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-950/40 text-red-400 border border-red-900/60 hover:bg-red-900/80 hover:text-white text-xs font-semibold transition"
+                          onClick={() => openEditModal(dev)}
+                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700 text-xs font-semibold transition"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>Thu hồi</span>
+                          <Pencil className="w-3.5 h-3.5" />
+                          <span>Sửa</span>
                         </button>
+
+                        {!isDecommissioned && (
+                          <>
+                            <button
+                              onClick={() => handleToggleMaintenance(dev)}
+                              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition ${
+                                isMaintenance
+                                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
+                                  : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
+                              }`}
+                            >
+                              <Wrench className="w-3.5 h-3.5" />
+                              <span>{isMaintenance ? 'Tắt bảo trì' : 'Bật bảo trì'}</span>
+                            </button>
+
+                            {isAdmin && (
+                              <>
+                                {isSuspended ? (
+                                  <button
+                                    onClick={() => handleUnsuspend(dev)}
+                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 text-xs font-semibold transition"
+                                  >
+                                    <RotateCcw className="w-3.5 h-3.5" />
+                                    <span>Mở đình chỉ</span>
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => setSuspendModalDevice(dev)}
+                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 text-xs font-semibold transition"
+                                  >
+                                    <Ban className="w-3.5 h-3.5" />
+                                    <span>Đình chỉ</span>
+                                  </button>
+                                )}
+
+                                <button
+                                  onClick={() => handleDecommission(dev)}
+                                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-950/40 text-red-400 border border-red-900/60 hover:bg-red-900/80 hover:text-white text-xs font-semibold transition"
+                                >
+                                  <Ban className="w-3.5 h-3.5" />
+                                  <span>Thu hồi</span>
+                                </button>
+                              </>
+                            )}
+                          </>
+                        )}
+
+                        {isAdmin && (
+                          <button
+                            onClick={() => handleDeletePermanent(dev)}
+                            title="Xóa hẳn thiết bị khỏi CSDL"
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-950/60 text-rose-300 border border-rose-800/70 hover:bg-rose-800 hover:text-white text-xs font-semibold transition"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Xóa hẳn</span>
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -445,9 +704,16 @@ export const DevicesPage: React.FC = () => {
                   </tr>
                 ) : (
                   filteredDevices.map((dev) => {
+                    const wsStatus = deviceStatus[dev.device_code];
+                    const wsTelemetry = latestTelemetry[dev.device_code];
+                    const liveOnline = wsStatus ? wsStatus.state !== 'OFFLINE' : dev.is_online;
+                    const liveIp = wsTelemetry?.ip_address ?? wsStatus?.ip_address ?? dev.ip_address;
+                    const liveMac = wsTelemetry?.mac_address ?? wsStatus?.mac_address ?? dev.mac_address;
                     const isSuspended = dev.lifecycle_state === 'SUSPENDED';
                     const isDecommissioned = dev.lifecycle_state === 'DECOMMISSIONED';
                     const isMaintenance = dev.lifecycle_state === 'MAINTENANCE';
+                    const needsActivation =
+                      dev.lifecycle_state === 'REGISTERED' || dev.lifecycle_state === 'PROVISIONED';
 
                     return (
                       <tr
@@ -456,7 +722,12 @@ export const DevicesPage: React.FC = () => {
                         onClick={() => navigate(`/devices/${dev.id}`)}
                       >
                         <td className="py-3.5 px-4 font-mono font-bold text-amber-400">
-                          {dev.device_code}
+                          <div>{dev.device_code}</div>
+                          {(liveIp || liveMac) && (
+                            <div className="text-[10px] font-normal text-sky-300 mt-0.5">
+                              {liveIp || liveMac}
+                            </div>
+                          )}
                         </td>
                         <td className="py-3.5 px-4 font-medium text-slate-100">
                           {dev.name}
@@ -471,20 +742,21 @@ export const DevicesPage: React.FC = () => {
                           <div className="flex items-center gap-1.5">
                             <span
                               className={`w-2 h-2 rounded-full ${
-                                dev.is_online ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'
+                                liveOnline ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'
                               }`}
                             />
                             <span
                               className={`font-semibold ${
-                                dev.is_online ? 'text-emerald-400' : 'text-rose-400'
+                                liveOnline ? 'text-emerald-400' : 'text-rose-400'
                               }`}
                             >
-                              {dev.is_online ? 'ONLINE' : 'OFFLINE'}
+                              {liveOnline ? 'ONLINE' : 'OFFLINE'}
                             </span>
                           </div>
                         </td>
                         <td className="py-3.5 px-4 text-slate-400 font-mono text-[11px]">
-                          v{dev.fw_version} | {dev.hw_version}
+                          <div>v{dev.fw_version} | {dev.hw_version}</div>
+                          {liveMac && <div className="text-[10px] text-slate-500">MAC: {liveMac}</div>}
                         </td>
                         <td className="py-3.5 px-4 text-slate-400 text-[11px]">
                           {dev.last_seen_at
@@ -508,45 +780,81 @@ export const DevicesPage: React.FC = () => {
                               <ExternalLink className="w-3.5 h-3.5" />
                             </button>
 
-                            {!isDecommissioned && (
+                            {!isViewer && (
                               <>
-                                <button
-                                  onClick={() => handleToggleMaintenance(dev)}
-                                  title={isMaintenance ? 'Tắt chế độ bảo trì' : 'Bật chế độ bảo trì'}
-                                  className={`p-1.5 rounded-lg border transition ${
-                                    isMaintenance
-                                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
-                                      : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
-                                  }`}
-                                >
-                                  <Wrench className="w-3.5 h-3.5" />
-                                </button>
-
-                                {isSuspended ? (
+                                {needsActivation && (
                                   <button
-                                    onClick={() => handleUnsuspend(dev)}
-                                    title="Mở đình chỉ thiết bị"
+                                    onClick={() => handleActivate(dev)}
+                                    title="Kích hoạt thiết bị (ACTIVE)"
                                     className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 transition"
                                   >
-                                    <RotateCcw className="w-3.5 h-3.5" />
-                                  </button>
-                                ) : (
-                                  <button
-                                    onClick={() => setSuspendModalDevice(dev)}
-                                    title="Đình chỉ (Suspend)"
-                                    className="p-1.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition"
-                                  >
-                                    <Ban className="w-3.5 h-3.5" />
+                                    <PlayCircle className="w-3.5 h-3.5" />
                                   </button>
                                 )}
 
                                 <button
-                                  onClick={() => handleDecommission(dev)}
-                                  title="Thu hồi vĩnh viễn (Decommission)"
-                                  className="p-1.5 rounded-lg bg-red-950/40 text-red-400 border border-red-900/60 hover:bg-red-900/80 hover:text-white transition"
+                                  onClick={() => openEditModal(dev)}
+                                  title="Sửa tên / chuyển khu vực kho"
+                                  className="p-1.5 rounded-lg bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700 transition"
                                 >
-                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <Pencil className="w-3.5 h-3.5" />
                                 </button>
+
+                                {!isDecommissioned && (
+                                  <>
+                                    <button
+                                      onClick={() => handleToggleMaintenance(dev)}
+                                      title={isMaintenance ? 'Tắt chế độ bảo trì' : 'Bật chế độ bảo trì'}
+                                      className={`p-1.5 rounded-lg border transition ${
+                                        isMaintenance
+                                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
+                                          : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
+                                      }`}
+                                    >
+                                      <Wrench className="w-3.5 h-3.5" />
+                                    </button>
+
+                                    {isAdmin && (
+                                      <>
+                                        {isSuspended ? (
+                                          <button
+                                            onClick={() => handleUnsuspend(dev)}
+                                            title="Mở đình chỉ thiết bị"
+                                            className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 transition"
+                                          >
+                                            <RotateCcw className="w-3.5 h-3.5" />
+                                          </button>
+                                        ) : (
+                                          <button
+                                            onClick={() => setSuspendModalDevice(dev)}
+                                            title="Đình chỉ (Suspend)"
+                                            className="p-1.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition"
+                                          >
+                                            <Ban className="w-3.5 h-3.5" />
+                                          </button>
+                                        )}
+
+                                        <button
+                                          onClick={() => handleDecommission(dev)}
+                                          title="Thu hồi vĩnh viễn (Decommission)"
+                                          className="p-1.5 rounded-lg bg-red-950/40 text-red-400 border border-red-900/60 hover:bg-red-900/80 hover:text-white transition"
+                                        >
+                                          <Ban className="w-3.5 h-3.5" />
+                                        </button>
+                                      </>
+                                    )}
+                                  </>
+                                )}
+
+                                {isAdmin && (
+                                  <button
+                                    onClick={() => handleDeletePermanent(dev)}
+                                    title="Xóa hẳn khỏi CSDL"
+                                    className="p-1.5 rounded-lg bg-rose-950/60 text-rose-300 border border-rose-800/70 hover:bg-rose-800 hover:text-white transition"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
                               </>
                             )}
                           </div>
@@ -667,7 +975,7 @@ export const DevicesPage: React.FC = () => {
                       disabled={isSubmittingOnboard}
                       className="px-4 py-2 rounded-xl bg-amber-500 text-slate-950 hover:bg-amber-400 font-bold text-xs flex items-center gap-2"
                     >
-                      {isSubmittingOnboard ? 'Đang khởi tạo...' : 'Tạo Thiết bị & Sinh Token'}
+                      {isSubmittingOnboard ? 'Đang khởi tạo...' : 'Thêm Thiết Bị Vào Hệ Thống'}
                     </button>
                   </div>
                 </form>
@@ -769,6 +1077,143 @@ export const DevicesPage: React.FC = () => {
                 className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-2"
               >
                 {isSubmittingSuspend ? 'Đang xử lý...' : 'Xác nhận Đình chỉ'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: EDIT DEVICE */}
+      {editModalDevice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Pencil className="w-4 h-4 text-amber-400" />
+                <h2 className="text-base font-bold text-slate-100">
+                  Chỉnh sửa Thiết bị{' '}
+                  <span className="font-mono text-amber-400">{editModalDevice.device_code}</span>
+                </h2>
+              </div>
+              <button
+                onClick={() => setEditModalDevice(null)}
+                className="text-slate-400 hover:text-slate-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditSubmit} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Tên gọi hiển thị *</label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-amber-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Khu vực Silo Lưu trữ *</label>
+                <select
+                  value={editZoneId}
+                  onChange={(e) => setEditZoneId(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-amber-500"
+                >
+                  {zones.map((z) => (
+                    <option key={z.id} value={z.id}>
+                      {z.name} ({z.grain_type})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Firmware Version</label>
+                  <input
+                    type="text"
+                    value={editFwVersion}
+                    onChange={(e) => setEditFwVersion(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Hardware Version</label>
+                  <input
+                    type="text"
+                    value={editHwVersion}
+                    onChange={(e) => setEditHwVersion(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setEditModalDevice(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs"
+                >
+                  Huỷ bỏ
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingEdit}
+                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs"
+                >
+                  {isSubmittingEdit ? 'Đang lưu...' : 'Lưu thay đổi'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ROTATED SECRET TOKEN */}
+      {rotatedTokenInfo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-2 text-amber-400">
+              <KeyRound className="w-5 h-5" />
+              <h2 className="text-base font-bold text-slate-100">
+                Secret Token Mới — {rotatedTokenInfo.deviceCode}
+              </h2>
+            </div>
+
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs">
+              Token này chỉ hiển thị <strong>DUY NHẤT 1 LẦN</strong>. Hãy sao chép nếu bạn sử dụng xác thực HTTP/Token cho thiết bị.
+            </div>
+
+            <div className="relative">
+              <input
+                type="text"
+                readOnly
+                value={rotatedTokenInfo.token}
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 pr-20 text-xs text-amber-300 font-mono select-all focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(rotatedTokenInfo.token);
+                  setHasCopiedRotatedToken(true);
+                  showToast('Đã sao chép token mới vào clipboard!', 'success');
+                }}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition"
+              >
+                {hasCopiedRotatedToken ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{hasCopiedRotatedToken ? 'Đã chép' : 'Copy'}</span>
+              </button>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-800">
+              <button
+                onClick={() => setRotatedTokenInfo(null)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs"
+              >
+                Đóng
               </button>
             </div>
           </div>

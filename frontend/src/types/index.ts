@@ -1,6 +1,19 @@
 export type Role = 'ADMIN' | 'OPERATOR' | 'VIEWER';
 export type UserStatus = 'ACTIVE' | 'LOCKED';
 
+export const getRoleDisplayName = (role?: Role | string, short: boolean = false): string => {
+  switch (role) {
+    case 'ADMIN':
+      return short ? 'Chủ kho' : 'Chủ kho (Admin)';
+    case 'OPERATOR':
+      return short ? 'Vận hành' : 'Vận hành (Operator)';
+    case 'VIEWER':
+      return short ? 'Giám sát QC' : 'Giám sát / QC (Chỉ xem)';
+    default:
+      return role || '';
+  }
+};
+
 export type LifecycleState =
   | 'REGISTERED'
   | 'PROVISIONED'
@@ -41,6 +54,50 @@ export interface WarehouseZone {
   created_at: string;
 }
 
+export interface Aht20Health {
+  enabled?: boolean;
+  ok: boolean;
+  status: 'OK' | 'DISCONNECTED' | 'READ_ERROR' | 'SIMULATED' | 'DISABLED' | string;
+  pin?: string;
+  message?: string;
+}
+
+export interface Mq135Health {
+  enabled?: boolean;
+  ok: boolean;
+  status: 'OK' | 'DISCONNECTED' | 'OUT_OF_RANGE' | 'SIMULATED' | 'DISABLED' | string;
+  raw_adc?: number;
+  pin?: string;
+  message?: string;
+}
+
+export interface DoorSensorHealth {
+  enabled?: boolean;
+  ok: boolean;
+  status: string;
+  raw_logic?: number;
+  pin?: string;
+  message?: string;
+}
+
+export interface PeripheralConfig {
+  aht20_enabled?: boolean;
+  mq135_enabled?: boolean;
+  door_enabled?: boolean;
+  fan_enabled?: boolean;
+  fan_auto?: boolean;
+  buzzer_enabled?: boolean;
+  buzzer_auto?: boolean;
+}
+
+export interface SensorHealth {
+  aht20?: Aht20Health;
+  mq135?: Mq135Health;
+  door_sensor?: DoorSensorHealth;
+  fault_count?: number;
+  updated_at?: number;
+}
+
 export interface Device {
   id: string;
   device_code: string;
@@ -54,7 +111,27 @@ export interface Device {
   config_json: any;
   last_seen_at?: string | null;
   telemetry_logs?: TelemetryLog[];
+  sensor_health?: SensorHealth | null;
+  door_open?: boolean | null;
+  ip_address?: string | null;
+  mac_address?: string | null;
+  chip_id?: string | null;
+  rssi?: number | null;
   created_at: string;
+}
+
+export interface DiscoveredDevice {
+  device_code: string;
+  ip_address?: string;
+  mac_address?: string;
+  chip_id?: string;
+  rssi?: number;
+  fw_version?: string;
+  hw_version?: string;
+  sensor_health?: SensorHealth | null;
+  first_seen_at: number;
+  last_seen_at: number;
+  last_channel: 'telemetry' | 'status';
 }
 
 export interface TelemetryLog {

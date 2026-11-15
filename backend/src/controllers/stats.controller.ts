@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import prisma from '../config/prisma';
 import { Role } from '@prisma/client';
+import { MQTTService } from '../services/mqtt.service';
 
 export class StatsController {
   static async getDashboardKPI(req: Request, res: Response): Promise<void> {
@@ -37,10 +38,14 @@ export class StatsController {
       devices.forEach((dev) => {
         if (dev.telemetry_logs.length > 0) {
           const log = dev.telemetry_logs[0];
-          sumTemp += log.temperature;
-          sumRH += log.humidity_air;
-          sumEMC += log.estimated_emc;
-          countWithData++;
+          const diag = MQTTService.getDeviceDiagnostics(dev.device_code);
+          const ahtOk = diag?.sensor_health?.aht20?.ok ?? true;
+          if (ahtOk) {
+            sumTemp += log.temperature;
+            sumRH += log.humidity_air;
+            sumEMC += log.estimated_emc;
+            countWithData++;
+          }
           if (log.fan_state) activeFansCount++;
         }
       });

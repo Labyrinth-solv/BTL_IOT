@@ -6,6 +6,8 @@ export interface EvaluationInput {
   gas_ppm: number;
   estimated_emc: number;
   custom_config?: any;
+  aht20_ok?: boolean;
+  mq135_ok?: boolean;
 }
 
 export interface RuleEngineResult {
@@ -23,7 +25,15 @@ export class RuleEngineService {
    * Đánh giá dữ liệu vi khí hậu và phân loại mức độ rủi ro kho ngũ cốc
    */
   static evaluate(input: EvaluationInput): RuleEngineResult {
-    const { temperature, humidity_air, gas_ppm, estimated_emc, custom_config } = input;
+    const {
+      temperature,
+      humidity_air,
+      gas_ppm,
+      estimated_emc,
+      custom_config,
+      aht20_ok = true,
+      mq135_ok = true,
+    } = input;
 
     // Ngưỡng tiêu chuẩn hoặc lấy từ cấu hình riêng của thiết bị
     const cfg = custom_config || {};
@@ -36,8 +46,8 @@ export class RuleEngineService {
     const emcWarnThreshold = cfg.emc_warn_threshold ?? 14.0;
     const emcCritThreshold = cfg.emc_crit_threshold ?? 14.8;
 
-    // 1. KIỂM TRA HIGH_RISK (CRITICAL)
-    if (humidity_air > rhCritThreshold) {
+    // 1. KIỂM TRA HIGH_RISK (CRITICAL) - Chỉ đánh giá trên các cảm biến đang hoạt động hợp lệ
+    if (aht20_ok && humidity_air > rhCritThreshold) {
       return {
         risk_level: RiskLevel.HIGH_RISK,
         should_turn_on_fan: true,
@@ -49,7 +59,7 @@ export class RuleEngineService {
       };
     }
 
-    if (gas_ppm >= gasCritThreshold) {
+    if (mq135_ok && gas_ppm >= gasCritThreshold) {
       return {
         risk_level: RiskLevel.HIGH_RISK,
         should_turn_on_fan: true,
@@ -61,7 +71,7 @@ export class RuleEngineService {
       };
     }
 
-    if (temperature > tempCritThreshold) {
+    if (aht20_ok && temperature > tempCritThreshold) {
       return {
         risk_level: RiskLevel.HIGH_RISK,
         should_turn_on_fan: true,
@@ -73,7 +83,7 @@ export class RuleEngineService {
       };
     }
 
-    if (estimated_emc > emcCritThreshold) {
+    if (aht20_ok && estimated_emc > emcCritThreshold) {
       return {
         risk_level: RiskLevel.HIGH_RISK,
         should_turn_on_fan: true,
@@ -86,7 +96,7 @@ export class RuleEngineService {
     }
 
     // 2. KIỂM TRA WARNING (CẢNH BÁO)
-    if (humidity_air > rhWarnThreshold) {
+    if (aht20_ok && humidity_air > rhWarnThreshold) {
       return {
         risk_level: RiskLevel.WARNING,
         should_turn_on_fan: true,
@@ -98,7 +108,7 @@ export class RuleEngineService {
       };
     }
 
-    if (gas_ppm >= gasWarnThreshold) {
+    if (mq135_ok && gas_ppm >= gasWarnThreshold) {
       return {
         risk_level: RiskLevel.WARNING,
         should_turn_on_fan: true,
@@ -110,7 +120,7 @@ export class RuleEngineService {
       };
     }
 
-    if (temperature > tempWarnThreshold) {
+    if (aht20_ok && temperature > tempWarnThreshold) {
       return {
         risk_level: RiskLevel.WARNING,
         should_turn_on_fan: true,
@@ -122,7 +132,7 @@ export class RuleEngineService {
       };
     }
 
-    if (estimated_emc > emcWarnThreshold) {
+    if (aht20_ok && estimated_emc > emcWarnThreshold) {
       return {
         risk_level: RiskLevel.WARNING,
         should_turn_on_fan: true,

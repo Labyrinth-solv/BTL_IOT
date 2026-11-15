@@ -3,9 +3,10 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
-import { Device, TelemetryLog, DeviceCommand } from '../types';
+import { Device, TelemetryLog, DeviceCommand, PeripheralConfig } from '../types';
 import { RiskBadge } from '../components/RiskBadge';
 import { LifecycleBadge } from '../components/LifecycleBadge';
+import { SensorHealthPanel } from '../components/SensorHealthPanel';
 import {
   LineChart,
   Line,
@@ -31,23 +32,38 @@ import {
   CheckCircle,
   AlertCircle,
   Send,
+  Volume2,
+  Cpu,
 } from 'lucide-react';
 
 export const DeviceDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { isViewer, showToast } = useAuth();
-  const { latestTelemetry, latestAck } = useSocket();
+  const { latestTelemetry, deviceStatus, latestAck } = useSocket();
 
   const [device, setDevice] = useState<Device | null>(null);
   const [telemetryHistory, setTelemetryHistory] = useState<TelemetryLog[]>([]);
   const [commands, setCommands] = useState<DeviceCommand[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Cấu hình từ xa
+  // Cấu hình từ xa & ngưỡng NVS
   const [samplingInterval, setSamplingInterval] = useState(3000);
   const [tempWarn, setTempWarn] = useState(25.0);
+  const [tempCrit, setTempCrit] = useState(28.0);
   const [humWarn, setHumWarn] = useState(65.0);
+  const [humCrit, setHumCrit] = useState(70.0);
+  const [gasWarn, setGasWarn] = useState(600);
+  const [gasCrit, setGasCrit] = useState(700);
+  const [peripherals, setPeripherals] = useState<PeripheralConfig>({
+    aht20_enabled: true,
+    mq135_enabled: true,
+    door_enabled: true,
+    fan_enabled: true,
+    fan_auto: true,
+    buzzer_enabled: true,
+    buzzer_auto: true,
+  });
   const [isConfiguring, setIsConfiguring] = useState(false);
 
   const fetchDeviceData = async () => {
@@ -62,7 +78,22 @@ export const DeviceDetailPage: React.FC = () => {
         const cfg = res.data.config_json || {};
         if (cfg.sampling_interval_ms) setSamplingInterval(cfg.sampling_interval_ms);
         if (cfg.temp_warn_threshold) setTempWarn(cfg.temp_warn_threshold);
+        if (cfg.temp_crit_threshold) setTempCrit(cfg.temp_crit_threshold);
         if (cfg.hum_warn_threshold) setHumWarn(cfg.hum_warn_threshold);
+        if (cfg.hum_crit_threshold) setHumCrit(cfg.hum_crit_threshold);
+        if (cfg.gas_warn_threshold) setGasWarn(cfg.gas_warn_threshold);
+        if (cfg.gas_crit_threshold) setGasCrit(cfg.gas_crit_threshold);
+        if (cfg.peripherals) {
+          setPeripherals({
+            aht20_enabled: cfg.peripherals.aht20_enabled !== false,
+            mq135_enabled: cfg.peripherals.mq135_enabled !== false,
+            door_enabled: cfg.peripherals.door_enabled !== false,
+            fan_enabled: cfg.peripherals.fan_enabled !== false,
+            fan_auto: cfg.peripherals.fan_auto !== false,
+            buzzer_enabled: cfg.peripherals.buzzer_enabled !== false,
+            buzzer_auto: cfg.peripherals.buzzer_auto !== false,
+          });
+        }
       }
     } catch (err: any) {
       showToast(err.message || 'Lỗi tải thông tin thiết bị', 'error');
@@ -113,7 +144,7 @@ export const DeviceDetailPage: React.FC = () => {
     if (!device) return;
 
     if (isViewer) {
-      showToast('Tài khoản VIEWER không có quyền đổi cấu hình thiết bị! (403 Forbidden)', 'error');
+      showToast('Vai trò Giám sát / QC không có quyền đổi cấu hình thiết bị! (403 Forbidden)', 'error');
       return;
     }
 
@@ -122,15 +153,48 @@ export const DeviceDetailPage: React.FC = () => {
       const payload = {
         sampling_interval_ms: Number(samplingInterval),
         temp_warn_threshold: Number(tempWarn),
+        temp_crit_threshold: Number(tempCrit),
         hum_warn_threshold: Number(humWarn),
+        hum_crit_threshold: Number(humCrit),
+        gas_warn_threshold: Number(gasWarn),
+        gas_crit_threshold: Number(gasCrit),
+        peripherals,
       };
       const res = await api.updateConfig(device.id, payload);
       if (res.success) {
-        showToast('Đã phát lệnh cập nhật cấu hình xuống thiết bị (/cmd)!', 'success');
+        showToast('Đã đồng bộ cấu hình & trạng thái module xuống Flash (NVS) thiết bị!', 'success');
         fetchDeviceData();
       }
     } catch (err: any) {
       showToast(err.message || 'Lỗi lưu cấu hình', 'error');
+    } finally {
+      setIsConfiguring(false);
+    }
+  };
+
+  const handleTogglePeripheral = (key: keyof PeripheralConfig) => {
+    setPeripherals((prev) => ({
+      ...prev,
+      [key]: !(prev[key] !== false),
+    }));
+  };
+
+  const handleSavePeripheralsOnly = async () => {
+    if (!device) return;
+    if (isViewer) {
+      showToast('Vai trò Giám sát / QC không có quyền đổi cấu hình thiết bị! (403 Forbidden)', 'error');
+      return;
+    }
+
+    setIsConfiguring(true);
+    try {
+      const res = await api.updateConfig(device.id, { peripherals });
+      if (res.success) {
+        showToast('Đã lưu & phát cấu hình bật/tắt Module xuống ESP32!', 'success');
+        fetchDeviceData();
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Lỗi cập nhật module ngoại vi', 'error');
     } finally {
       setIsConfiguring(false);
     }
@@ -143,21 +207,27 @@ export const DeviceDetailPage: React.FC = () => {
     showToast('Đang tải xuống báo cáo lịch sử CSV...', 'success');
   };
 
-  const handleToggleFan = async (currentFanState: boolean) => {
+  const handleControlActuator = async (
+    target: 'VENTILATION_FAN' | 'ALARM_BUZZER',
+    currentState: boolean
+  ) => {
     if (!device) return;
 
-    const action = currentFanState ? 'TURN_OFF' : 'TURN_ON';
+    const action = currentState ? 'TURN_OFF' : 'TURN_ON';
+    const isFan = target === 'VENTILATION_FAN';
+    const label = isFan ? 'quạt thông gió' : 'còi test';
+
     try {
       const res = await api.controlActuator(device.id, {
-        target: 'VENTILATION_FAN',
+        target,
         action,
-        control_mode: 'MANUAL',
+        ...(isFan ? { control_mode: 'MANUAL' } : {}),
       });
       if (res.success) {
-        showToast(`Đã gửi lệnh ${action === 'TURN_ON' ? 'BẬT' : 'TẮT'} quạt thông gió. Đang chờ phản hồi ACK...`, 'warning');
+        showToast(`Đã gửi lệnh ${action === 'TURN_ON' ? 'BẬT' : 'TẮT'} ${label}. Đang chờ phản hồi ACK...`, 'warning');
       }
     } catch (err: any) {
-      showToast(err.message || 'Lỗi gửi lệnh điều khiển quạt', 'error');
+      showToast(err.message || `Lỗi gửi lệnh điều khiển ${label}`, 'error');
     }
   };
 
@@ -169,25 +239,36 @@ export const DeviceDetailPage: React.FC = () => {
     );
   }
 
-  // Tính Min / Max / Avg cho số liệu lịch sử
-  const temps = telemetryHistory.map((t) => t.temperature);
-  const rhs = telemetryHistory.map((t) => t.humidity_air);
-  const emcs = telemetryHistory.map((t) => t.estimated_emc);
+  // Tính Min / Max / Avg cho số liệu lịch sử (lọc bỏ điểm 0/0 khi mất cảm biến AHT20)
+  const validAhtLogs = telemetryHistory.filter((t) => !(t.temperature === 0 && t.humidity_air === 0));
+  const temps = validAhtLogs.map((t) => t.temperature);
+  const rhs = validAhtLogs.map((t) => t.humidity_air);
+  const emcs = validAhtLogs.map((t) => t.estimated_emc);
 
-  const avgTemp = temps.length ? (temps.reduce((a, b) => a + b, 0) / temps.length).toFixed(1) : 0;
-  const maxTemp = temps.length ? Math.max(...temps).toFixed(1) : 0;
-  const minTemp = temps.length ? Math.min(...temps).toFixed(1) : 0;
+  const avgTemp = temps.length ? (temps.reduce((a, b) => a + b, 0) / temps.length).toFixed(1) : '--';
+  const maxTemp = temps.length ? Math.max(...temps).toFixed(1) : '--';
+  const minTemp = temps.length ? Math.min(...temps).toFixed(1) : '--';
 
-  const avgRH = rhs.length ? (rhs.reduce((a, b) => a + b, 0) / rhs.length).toFixed(1) : 0;
-  const maxRH = rhs.length ? Math.max(...rhs).toFixed(1) : 0;
-  const minRH = rhs.length ? Math.min(...rhs).toFixed(1) : 0;
+  const avgRH = rhs.length ? (rhs.reduce((a, b) => a + b, 0) / rhs.length).toFixed(1) : '--';
+  const maxRH = rhs.length ? Math.max(...rhs).toFixed(1) : '--';
+  const minRH = rhs.length ? Math.min(...rhs).toFixed(1) : '--';
 
-  const avgEMC = emcs.length ? (emcs.reduce((a, b) => a + b, 0) / emcs.length).toFixed(1) : 0;
+  const avgEMC = emcs.length ? (emcs.reduce((a, b) => a + b, 0) / emcs.length).toFixed(1) : '--';
 
   const wsData = latestTelemetry[device.device_code];
+  const wsStatus = deviceStatus[device.device_code];
+  const liveIp = wsData?.ip_address ?? wsStatus?.ip_address ?? device.ip_address;
+  const liveMac = wsData?.mac_address ?? wsStatus?.mac_address ?? device.mac_address;
+  const liveRssi = wsData?.rssi ?? wsStatus?.rssi ?? device.rssi;
+  const sensorHealth = wsData?.sensor_health ?? device.sensor_health;
+  const doorOpen = wsData?.door_open ?? device.door_open;
   const currentFanState = wsData
     ? wsData.fan_state === 'ON'
     : (telemetryHistory[telemetryHistory.length - 1]?.fan_state ?? false);
+  const currentBuzzerState = wsData ? wsData.buzzer_state === 'ON' : false;
+  const fanEnabled = (device.config_json?.peripherals?.fan_enabled ?? peripherals.fan_enabled) !== false;
+  const buzzerEnabled =
+    (device.config_json?.peripherals?.buzzer_enabled ?? peripherals.buzzer_enabled) !== false;
 
   // Định dạng dữ liệu cho biểu đồ Recharts
   const chartData = telemetryHistory.map((item) => ({
@@ -218,9 +299,20 @@ export const DeviceDetailPage: React.FC = () => {
               <h1 className="text-xl font-bold text-slate-100">{device.name}</h1>
               <span className="font-mono text-xs text-slate-400">({device.device_code})</span>
             </div>
-            <p className="text-xs text-slate-400">
-              Khu vực: <span className="text-slate-200 font-medium">{device.zone?.name}</span> | Phần cứng:{' '}
-              {device.hw_version} | Firmware: v{device.fw_version}
+            <p className="text-xs text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span>
+                Khu vực: <span className="text-slate-200 font-medium">{device.zone?.name}</span>
+              </span>
+              <span>| Phần cứng: {device.hw_version} | FW: v{device.fw_version}</span>
+              {liveIp && (
+                <span className="font-mono text-sky-300">| IP: {liveIp}</span>
+              )}
+              {liveMac && (
+                <span className="font-mono text-slate-300">| MAC: {liveMac}</span>
+              )}
+              {typeof liveRssi === 'number' && (
+                <span className="font-mono text-emerald-300">| {liveRssi} dBm</span>
+              )}
             </p>
           </div>
         </div>
@@ -230,16 +322,72 @@ export const DeviceDetailPage: React.FC = () => {
 
           {/* Công Tắc Quạt Thông Gió Nhanh */}
           <button
-            onClick={() => handleToggleFan(currentFanState)}
+            onClick={() => handleControlActuator('VENTILATION_FAN', currentFanState)}
+            disabled={!fanEnabled || isViewer}
             className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
-              currentFanState
-                ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold shadow-lg shadow-amber-500/20'
-                : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+              !fanEnabled || isViewer
+                ? 'bg-slate-900 text-slate-500 border-slate-800 opacity-60 cursor-not-allowed'
+                : currentFanState
+                ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold shadow-lg shadow-amber-500/20 cursor-pointer'
+                : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700 cursor-pointer'
             }`}
-            title={currentFanState ? 'Bấm để Tắt quạt thông gió' : 'Bấm để Bật quạt thông gió'}
+            title={
+              isViewer
+                ? 'Vai trò Giám sát / QC chỉ có quyền xem'
+                : !fanEnabled
+                ? 'Quạt thông gió (Relay K1) đã bị tắt trong cấu hình Module'
+                : currentFanState
+                ? 'Bấm để Tắt quạt thông gió'
+                : 'Bấm để Bật quạt thông gió'
+            }
           >
-            <Fan className={`w-4 h-4 ${currentFanState ? 'animate-spin' : ''}`} />
-            <span>{currentFanState ? 'Quạt: BẬT (ON)' : 'Quạt: TẮT (OFF)'}</span>
+            <Fan className={`w-4 h-4 ${fanEnabled && currentFanState ? 'animate-spin' : ''}`} />
+            <span>
+              {!fanEnabled
+                ? 'Quạt: ĐÃ VÔ HIỆU'
+                : currentFanState
+                ? 'Quạt: BẬT (ON)'
+                : 'Quạt: TẮT (OFF)'}
+            </span>
+          </button>
+
+          {/* Nút Kích Hoạt Bật Còi Test */}
+          <button
+            onClick={() => handleControlActuator('ALARM_BUZZER', currentBuzzerState)}
+            disabled={!buzzerEnabled || isViewer}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
+              !buzzerEnabled || isViewer
+                ? 'bg-slate-900 text-slate-500 border-slate-800 opacity-60 cursor-not-allowed'
+                : currentBuzzerState
+                ? 'bg-rose-500 text-white border-rose-400 font-bold shadow-lg shadow-rose-500/25 animate-pulse cursor-pointer'
+                : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700 cursor-pointer'
+            }`}
+            title={
+              isViewer
+                ? 'Vai trò Giám sát / QC chỉ có quyền xem'
+                : !buzzerEnabled
+                ? 'Còi báo động (Relay K2) đã bị tắt trong cấu hình Module'
+                : currentBuzzerState
+                ? 'Bấm để Tắt còi báo động'
+                : 'Bấm để kích hoạt Bật còi (Test Relay K2)'
+            }
+          >
+            <Volume2
+              className={`w-4 h-4 ${
+                !buzzerEnabled
+                  ? 'text-slate-500'
+                  : currentBuzzerState
+                  ? 'animate-bounce'
+                  : 'text-rose-400'
+              }`}
+            />
+            <span>
+              {!buzzerEnabled
+                ? 'Còi: ĐÃ VÔ HIỆU'
+                : currentBuzzerState
+                ? 'Còi: ĐANG BẬT (Tắt)'
+                : 'Test Còi'}
+            </span>
           </button>
 
           <button
@@ -251,6 +399,14 @@ export const DeviceDetailPage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Chẩn đoán trạng thái cảm biến phần cứng realtime */}
+      <SensorHealthPanel
+        sensorHealth={sensorHealth}
+        doorOpen={doorOpen}
+        isOnline={device.is_online}
+        variant="detailed"
+      />
 
       {/* Thống kê nhanh Min / Max / Avg */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -351,16 +507,168 @@ export const DeviceDetailPage: React.FC = () => {
         </div>
       </div>
 
+      {/* Quản Lý Từng Module & Ngoại Vi Gắn Trên ESP32 */}
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-2.5">
+            <Cpu className="w-4 h-4 text-sky-400" />
+            <div>
+              <h3 className="font-bold text-slate-100 text-sm">
+                Quản Lý Từng Module &amp; Ngoại Vi Trên ESP32
+              </h3>
+              <p className="text-xs text-slate-400">
+                Bật/tắt theo dõi cảm biến và cho phép kích hoạt Relay K1/K2 (lưu vào NVS Flash của ESP32). Tắt cảm biến nếu node không gắn module đó để không báo lỗi giả.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleSavePeripheralsOnly}
+            disabled={isConfiguring || isViewer}
+            className="shrink-0 px-4 py-2 rounded-xl text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white shadow-lg shadow-sky-600/20 transition-all disabled:opacity-50 cursor-pointer"
+          >
+            {isConfiguring ? 'Đang đồng bộ...' : 'Lưu Trạng Thái Module'}
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {/* AHT20 */}
+          <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-bold text-slate-200">Cảm biến AHT20 (Nhiệt &amp; Ẩm)</div>
+              <div className="text-[11px] text-slate-400 mt-0.5 font-mono">I2C 0x38 (SDA21 / SCL22)</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleTogglePeripheral('aht20_enabled')}
+              disabled={isViewer}
+              className={`px-3 py-1.5 rounded-xl text-[11px] font-bold border transition-all cursor-pointer ${
+                peripherals.aht20_enabled !== false
+                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+                  : 'bg-slate-800 text-slate-400 border-slate-700'
+              }`}
+            >
+              {peripherals.aht20_enabled !== false ? 'ĐANG BẬT' : 'ĐÃ TẮT'}
+            </button>
+          </div>
+
+          {/* MQ-135 */}
+          <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-bold text-slate-200">Cảm biến Khí Gas MQ-135</div>
+              <div className="text-[11px] text-slate-400 mt-0.5 font-mono">ADC GPIO34</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleTogglePeripheral('mq135_enabled')}
+              disabled={isViewer}
+              className={`px-3 py-1.5 rounded-xl text-[11px] font-bold border transition-all cursor-pointer ${
+                peripherals.mq135_enabled !== false
+                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+                  : 'bg-slate-800 text-slate-400 border-slate-700'
+              }`}
+            >
+              {peripherals.mq135_enabled !== false ? 'ĐANG BẬT' : 'ĐÃ TẮT'}
+            </button>
+          </div>
+
+          {/* Door Sensor */}
+          <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-bold text-slate-200">Cảm biến Từ Cửa Kho</div>
+              <div className="text-[11px] text-slate-400 mt-0.5 font-mono">Digital GPIO27</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleTogglePeripheral('door_enabled')}
+              disabled={isViewer}
+              className={`px-3 py-1.5 rounded-xl text-[11px] font-bold border transition-all cursor-pointer ${
+                peripherals.door_enabled !== false
+                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+                  : 'bg-slate-800 text-slate-400 border-slate-700'
+              }`}
+            >
+              {peripherals.door_enabled !== false ? 'ĐANG BẬT' : 'ĐÃ TẮT'}
+            </button>
+          </div>
+
+          {/* Relay K1: Fan */}
+          <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-2.5 md:col-span-1">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-bold text-slate-200">Relay K1 - Quạt Thông Gió</div>
+                <div className="text-[11px] text-slate-400 mt-0.5 font-mono">GPIO26 (Active HIGH)</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleTogglePeripheral('fan_enabled')}
+                disabled={isViewer}
+                className={`px-3 py-1.5 rounded-xl text-[11px] font-bold border transition-all cursor-pointer ${
+                  peripherals.fan_enabled !== false
+                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+                    : 'bg-slate-800 text-slate-400 border-slate-700'
+                }`}
+              >
+                {peripherals.fan_enabled !== false ? 'CHO PHÉP' : 'VÔ HIỆU'}
+              </button>
+            </div>
+            <label className="flex items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-slate-800/80 cursor-pointer">
+              <span>Tự động bật quạt khi vượt ngưỡng (AUTO)</span>
+              <input
+                type="checkbox"
+                checked={peripherals.fan_auto !== false}
+                disabled={isViewer || peripherals.fan_enabled === false}
+                onChange={() => handleTogglePeripheral('fan_auto')}
+                className="accent-amber-500 w-3.5 h-3.5"
+              />
+            </label>
+          </div>
+
+          {/* Relay K2: Buzzer */}
+          <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-2.5 md:col-span-2 lg:col-span-2">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-bold text-slate-200">Relay K2 - Còi Báo Động (Buzzer)</div>
+                <div className="text-[11px] text-slate-400 mt-0.5 font-mono">GPIO25 (Active HIGH)</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleTogglePeripheral('buzzer_enabled')}
+                disabled={isViewer}
+                className={`px-3 py-1.5 rounded-xl text-[11px] font-bold border transition-all cursor-pointer ${
+                  peripherals.buzzer_enabled !== false
+                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+                    : 'bg-slate-800 text-slate-400 border-slate-700'
+                }`}
+              >
+                {peripherals.buzzer_enabled !== false ? 'CHO PHÉP' : 'VÔ HIỆU'}
+              </button>
+            </div>
+            <label className="flex items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-slate-800/80 cursor-pointer">
+              <span>Tự động hú còi khi chạm ngưỡng NGUY CẤP (Critical)</span>
+              <input
+                type="checkbox"
+                checked={peripherals.buzzer_auto !== false}
+                disabled={isViewer || peripherals.buzzer_enabled === false}
+                onChange={() => handleTogglePeripheral('buzzer_auto')}
+                className="accent-rose-500 w-3.5 h-3.5"
+              />
+            </label>
+          </div>
+        </div>
+      </div>
+
       {/* Row 2 Cột: Cấu Hình Từ Xa & Lịch Sử Lệnh Điều Khiển */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Cấu Hình Từ Xa */}
         <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg">
           <div className="flex items-center gap-2 mb-4">
             <Settings className="w-4 h-4 text-amber-400" />
-            <h3 className="font-bold text-slate-100 text-sm">Cấu Hình Thiết Bị Từ Xa (Remote Config)</h3>
+            <h3 className="font-bold text-slate-100 text-sm">Cấu Hình Ngưỡng &amp; Đồng Bộ NVS (Remote Config)</h3>
           </div>
           <p className="text-xs text-slate-400 mb-4">
-            Phát bản tin cập nhật cấu hình ngưỡng nhiệt ẩm và chu kỳ gửi dữ liệu xuống topic /cmd.
+            Cập nhật chu kỳ lấy mẫu và ngưỡng cảnh báo/nguy cấp xuống topic /cmd (ESP32 lưu vào Flash NVS, giữ nguyên sau mất điện).
           </p>
 
           <form onSubmit={handleSaveConfig} className="space-y-4">
@@ -381,7 +689,7 @@ export const DeviceDetailPage: React.FC = () => {
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Ngưỡng cảnh báo Temp (°C)</label>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Nhiệt cảnh báo (°C)</label>
                 <input
                   type="number"
                   step="0.5"
@@ -391,7 +699,17 @@ export const DeviceDetailPage: React.FC = () => {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Ngưỡng cảnh báo RH (%)</label>
+                <label className="block text-xs font-medium text-rose-300 mb-1">Nhiệt nguy cấp (°C)</label>
+                <input
+                  type="number"
+                  step="0.5"
+                  value={tempCrit}
+                  onChange={(e) => setTempCrit(Number(e.target.value))}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-rose-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Độ ẩm RH cảnh báo (%)</label>
                 <input
                   type="number"
                   step="0.5"
@@ -400,15 +718,45 @@ export const DeviceDetailPage: React.FC = () => {
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-amber-500"
                 />
               </div>
+              <div>
+                <label className="block text-xs font-medium text-rose-300 mb-1">Độ ẩm RH nguy cấp (%)</label>
+                <input
+                  type="number"
+                  step="0.5"
+                  value={humCrit}
+                  onChange={(e) => setHumCrit(Number(e.target.value))}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-rose-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Gas cảnh báo (ppm)</label>
+                <input
+                  type="number"
+                  step="10"
+                  value={gasWarn}
+                  onChange={(e) => setGasWarn(Number(e.target.value))}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-rose-300 mb-1">Gas nguy cấp (ppm)</label>
+                <input
+                  type="number"
+                  step="10"
+                  value={gasCrit}
+                  onChange={(e) => setGasCrit(Number(e.target.value))}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-200 focus:outline-none focus:border-rose-500"
+                />
+              </div>
             </div>
 
             <button
               type="submit"
-              disabled={isConfiguring}
-              className="w-full py-2.5 px-4 rounded-xl font-semibold text-xs bg-amber-500 hover:bg-amber-600 text-slate-950 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+              disabled={isConfiguring || isViewer}
+              className="w-full py-2.5 px-4 rounded-xl font-semibold text-xs bg-amber-500 hover:bg-amber-600 text-slate-950 flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >
               <Send className="w-3.5 h-3.5" />
-              <span>{isConfiguring ? 'Đang gửi lệnh...' : 'Lưu & Phát Lệnh Xuống Thiết Bị'}</span>
+              <span>{isConfiguring ? 'Đang gửi lệnh...' : 'Lưu & Đồng Bộ Cấu Hình Xuống Thiết Bị'}</span>
             </button>
           </form>
         </div>

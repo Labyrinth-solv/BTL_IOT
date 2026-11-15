@@ -298,15 +298,22 @@ function handleIncomingCommand(cmd: any) {
     if (target === 'VENTILATION_FAN') {
       if (action === 'TURN_ON') {
         primaryDevice.fan_state = 'ON';
-        message = 'Relay GPIO 26 switched HIGH (Quạt thông gió BẬT)';
+        message = 'Relay GPIO 25 switched HIGH (Quạt thông gió BẬT)';
       } else if (action === 'TURN_OFF') {
         primaryDevice.fan_state = 'OFF';
-        message = 'Relay GPIO 26 switched LOW (Quạt thông gió TẮT)';
+        message = 'Relay GPIO 25 switched LOW (Quạt thông gió TẮT)';
       }
-    }
-
-    if (payload?.control_mode) {
-      primaryDevice.control_mode = payload.control_mode;
+      if (payload?.control_mode) {
+        primaryDevice.control_mode = payload.control_mode;
+      }
+    } else if (target === 'ALARM_BUZZER') {
+      if (action === 'TURN_ON') {
+        primaryDevice.buzzer_state = 'ON';
+        message = 'Relay GPIO 33 switched HIGH (Còi báo động BẬT)';
+      } else if (action === 'TURN_OFF') {
+        primaryDevice.buzzer_state = 'OFF';
+        message = 'Relay GPIO 33 switched LOW (Còi báo động TẮT)';
+      }
     }
   } else if (type === 'UPDATE_CONFIG') {
     if (payload?.sampling_interval_ms && payload.sampling_interval_ms >= 1000) {

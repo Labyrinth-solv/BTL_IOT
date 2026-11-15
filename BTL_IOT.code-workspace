@@ -1,11 +1,12 @@
 {
 	"folders": [
 		{
-			"path": "../.."
+			"name": "BTL_IOT",
+			"path": "."
 		},
 		{
 			"name": "IOT_Firmware",
-			"path": "../../../IOT/IOT_Firmware"
+			"path": "./IOT_Firmware"
 		}
 	],
 	"settings": {}
