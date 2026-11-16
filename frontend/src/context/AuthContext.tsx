@@ -1,13 +1,12 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { User, Role, getRoleDisplayName } from '../types';
-import { api, ApiError } from '../services/api';
+import { User, getRoleDisplayName } from '../types';
+import { api } from '../services/api';
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<boolean>;
-  quickLogin: (role: Role) => Promise<boolean>;
   logout: () => void;
   isAdmin: boolean;
   isOperator: boolean;
@@ -33,34 +32,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     const fetchMe = async () => {
-      if (token) {
-        try {
-          const res = await api.getMe();
-          if (res.success) {
-            setUser(res.data);
-            setIsLoading(false);
-            return;
-          }
-        } catch (e) {}
+      if (!token) {
+        setUser(null);
+        setIsLoading(false);
+        return;
       }
 
-      // Tự động đăng nhập sẵn tài khoản Demo để vào thẳng Dashboard
       try {
-        const res = await api.login({ email: 'operator@grain.com', password: 'operator123' });
-        if (res.success && res.data?.token) {
-          localStorage.setItem('grain_token', res.data.token);
-          setToken(res.data.token);
-          setUser(res.data.user);
+        const res = await api.getMe();
+        if (res.success && res.data) {
+          setUser(res.data);
+          setIsLoading(false);
+          return;
         }
-      } catch (e) {
-        setUser({
-          id: 'demo-user',
-          email: 'operator@grain.com',
-          full_name: 'Thủ Kho Vận Hành (Demo)',
-          role: 'ADMIN',
-          status: 'ACTIVE',
-        });
+      } catch {
+        // Token hết hạn, không hợp lệ hoặc tài khoản đã bị khóa
       }
+
+      localStorage.removeItem('grain_token');
+      setToken(null);
+      setUser(null);
       setIsLoading(false);
     };
 
@@ -74,29 +65,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.setItem('grain_token', res.data.token);
         setToken(res.data.token);
         setUser(res.data.user);
-        showToast(`Đăng nhập thành công với vai trò: ${getRoleDisplayName(res.data.user.role)}`, 'success');
+        showToast(`Đăng nhập thành công (${getRoleDisplayName(res.data.user.role)})`, 'success');
         return true;
       }
       return false;
     } catch (err: any) {
-      showToast(err.message || 'Đăng nhập thất bại', 'error');
+      showToast(err.message || 'Email hoặc mật khẩu không chính xác', 'error');
       return false;
     }
-  };
-
-  const quickLogin = async (role: Role): Promise<boolean> => {
-    let email = 'operator@grain.com';
-    let password = 'operator123';
-
-    if (role === 'ADMIN') {
-      email = 'admin@grain.com';
-      password = 'admin123';
-    } else if (role === 'VIEWER') {
-      email = 'viewer@grain.com';
-      password = 'viewer123';
-    }
-
-    return login(email, password);
   };
 
   const logout = () => {
@@ -117,7 +93,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         token,
         isLoading,
         login,
-        quickLogin,
         logout,
         isAdmin,
         isOperator,

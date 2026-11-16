@@ -68,9 +68,9 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-600">
         <div className="flex flex-col items-center gap-3">
-          <div className="w-10 h-10 border-4 border-amber-500 border-t-transparent rounded-full animate-spin" />
+          <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
           <div className="text-sm font-semibold">Đang tải hệ thống Smart Grain Storage...</div>
         </div>
       </div>
@@ -82,7 +82,7 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans antialiased">
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans antialiased">
       {/* Top Navigation */}
       <Navbar
         isSimulatorOpen={isSimulatorOpen}
@@ -97,7 +97,7 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         <Sidebar />
 
         {/* Dynamic Page Content */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-gradient-to-b from-slate-900/50 to-slate-950">
+        <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-50">
           <div className="max-w-7xl mx-auto w-full">{children}</div>
         </main>
 
@@ -114,6 +114,15 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       <Toast />
     </div>
   );
+};
+
+// Admin-only route guard
+const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { isAdmin } = useAuth();
+  if (!isAdmin) {
+    return <Navigate to="/" replace />;
+  }
+  return <>{children}</>;
 };
 
 export const App: React.FC = () => {
@@ -170,7 +179,9 @@ export const App: React.FC = () => {
         path="/users"
         element={
           <MainLayout>
-            <UsersPage />
+            <AdminRoute>
+              <UsersPage />
+            </AdminRoute>
           </MainLayout>
         }
       />
@@ -179,7 +190,9 @@ export const App: React.FC = () => {
         path="/audit-logs"
         element={
           <MainLayout>
-            <AuditLogsPage />
+            <AdminRoute>
+              <AuditLogsPage />
+            </AdminRoute>
           </MainLayout>
         }
       />

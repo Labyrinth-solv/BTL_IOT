@@ -3,9 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
-import { Device, DashboardKPI } from '../types';
+import { CustomPeripheralConfig, CustomPeripheralRuntimeState, Device, DashboardKPI } from '../types';
 import { RiskBadge } from '../components/RiskBadge';
 import { SensorHealthPanel } from '../components/SensorHealthPanel';
+import { normalizePeripherals } from '../utils/peripherals';
 import {
   Thermometer,
   Droplets,
@@ -18,22 +19,26 @@ import {
   RefreshCw,
   Warehouse,
   Volume2,
-  AlertOctagon,
   Cpu,
+  Plus,
+  Power,
+  Gauge,
+  ToggleRight,
 } from 'lucide-react';
 
-type ActuatorTarget = 'VENTILATION_FAN' | 'ALARM_BUZZER';
+type ActuatorTarget = 'VENTILATION_FAN' | 'ALARM_BUZZER' | 'CUSTOM_PERIPHERAL';
 
 interface PendingCommandEntry {
   cmdId?: string;
   target: ActuatorTarget;
+  label?: string;
   targetState: string;
   timestamp: number;
 }
 
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
-  const { isViewer, showToast, user } = useAuth();
+  const { isAdmin, isViewer, showToast, user } = useAuth();
   const { latestTelemetry, deviceStatus, latestAck, discoveredDevices } = useSocket();
 
   const [devices, setDevices] = useState<Device[]>([]);
@@ -59,7 +64,7 @@ export const DashboardPage: React.FC = () => {
         );
       }
     } catch (e: any) {
-      showToast(e.message || 'Lỗi tải dữ liệu Dashboard', 'error');
+      showToast(e.message || 'Lỗi tải dữ liệu tổng quan', 'error');
     } finally {
       setIsLoading(false);
     }
@@ -71,7 +76,6 @@ export const DashboardPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [user]);
 
-  // Lắng nghe phản hồi ACK từ Socket để cập nhật trạng thái "Pending ACK... -> Active"
   useEffect(() => {
     const matchedKeys: string[] = [];
 
@@ -87,15 +91,21 @@ export const DashboardPage: React.FC = () => {
       if (ack.status === 'SUCCESS') {
         if (pending.target === 'ALARM_BUZZER') {
           const buzzerState = ack.current_actuators?.buzzer_state || pending.targetState;
-          showToast(`Nhận ACK từ ${devCode}: Còi báo động đã ${buzzerState === 'ON' ? 'BẬT (Test)' : 'TẮT'}!`, 'success');
-        } else {
+          showToast(`Còi báo động đã ${buzzerState === 'ON' ? 'BẬT' : 'TẮT'}`, 'success');
+        } else if (pending.target === 'CUSTOM_PERIPHERAL') {
           showToast(
-            `Nhận ACK từ ${devCode}: Quạt thông gió đã chuyển sang ${ack.current_actuators?.fan_state || 'mới'}!`,
+            `${pending.label || 'Thiết bị'} đã ${pending.targetState === 'ON' ? 'BẬT' : 'TẮT'}`,
+            'success'
+          );
+        } else {
+          const fanState = ack.current_actuators?.fan_state;
+          showToast(
+            `Quạt thông gió đã chuyển sang ${fanState === 'ON' ? 'BẬT' : 'TẮT'}`,
             'success'
           );
         }
       } else {
-        showToast(`${devCode}: ${ack.message || 'Lệnh điều khiển hết thời gian chờ (TIMEOUT)'}`, 'error');
+        showToast(`${devCode}: ${ack.message || 'Thiết bị không phản hồi lệnh'}`, 'error');
       }
     });
 
@@ -111,22 +121,31 @@ export const DashboardPage: React.FC = () => {
   const handleToggleActuator = async (
     device: Device,
     target: ActuatorTarget,
-    currentState: boolean
+    currentState: boolean,
+    customPeripheral?: CustomPeripheralConfig
   ) => {
     if (isViewer) {
-      showToast('Vai trò Giám sát / QC chỉ có quyền xem, không được điều khiển thiết bị! (403 Forbidden)', 'error');
+      showToast('Vai trò Giám sát QC chỉ có quyền xem, không thể điều khiển.', 'error');
       return;
     }
 
     const action = currentState ? 'TURN_OFF' : 'TURN_ON';
-    const pendingKey = `${device.device_code}:${target}`;
+    const isCustom = target === 'CUSTOM_PERIPHERAL' && customPeripheral;
+    const pendingKey = isCustom
+      ? `${device.device_code}:CP:${customPeripheral.id}`
+      : `${device.device_code}:${target}`;
     const isFan = target === 'VENTILATION_FAN';
-    const label = isFan ? 'quạt thông gió' : 'còi test';
+    const label = isCustom
+      ? customPeripheral.name
+      : isFan
+      ? 'quạt thông gió'
+      : 'còi báo động';
 
     setPendingCommands((prev) => ({
       ...prev,
       [pendingKey]: {
         target,
+        label,
         targetState: action === 'TURN_ON' ? 'ON' : 'OFF',
         timestamp: Date.now(),
       },
@@ -136,18 +155,16 @@ export const DashboardPage: React.FC = () => {
       const res = await api.controlActuator(device.id, {
         target,
         action,
+        ...(isCustom ? { peripheral_id: customPeripheral.id } : {}),
         ...(isFan ? { control_mode: 'MANUAL' } : {}),
       });
 
-      if (res.success) {
-        if (res.data?.cmd_id) {
-          setPendingCommands((prev) =>
-            prev[pendingKey]
-              ? { ...prev, [pendingKey]: { ...prev[pendingKey], cmdId: res.data.cmd_id } }
-              : prev
-          );
-        }
-        showToast(`Đã phát lệnh ${action === 'TURN_ON' ? 'BẬT' : 'TẮT'} ${label}. Đang chờ ACK từ thiết bị...`, 'warning');
+      if (res.success && res.data?.cmd_id) {
+        setPendingCommands((prev) =>
+          prev[pendingKey]
+            ? { ...prev, [pendingKey]: { ...prev[pendingKey], cmdId: res.data.cmd_id } }
+            : prev
+        );
       }
     } catch (err: any) {
       setPendingCommands((prev) => {
@@ -155,7 +172,7 @@ export const DashboardPage: React.FC = () => {
         delete copy[pendingKey];
         return copy;
       });
-      showToast(err.message || `Lỗi gửi lệnh điều khiển ${label}`, 'error');
+      showToast(err.message || `Không gửi được lệnh điều khiển ${label}`, 'error');
     }
   };
 
@@ -166,742 +183,670 @@ export const DashboardPage: React.FC = () => {
   const totalDiscoveredCount = Math.max(discoveredCount, socketUnregisteredCount);
 
   const activeDashboardDevices = devices.filter((d) => d.lifecycle_state !== 'DECOMMISSIONED');
-  const decommissionedCount = devices.length - activeDashboardDevices.length;
 
   return (
     <div className="space-y-6">
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2">
-            Dashboard Giám Sát Thời Gian Thực
-          </h1>
-          <p className="text-xs text-slate-400 mt-0.5">
-            Theo dõi vi khí hậu silo thóc tẻ TCVN 8370:2018 &amp; điều khiển quạt đối lưu
+          <h1 className="text-2xl font-bold text-slate-900">Tổng Quan Kho Ngũ Cốc</h1>
+          <p className="text-sm text-slate-500 mt-0.5">
+            Theo dõi nhiệt độ, độ ẩm, khí gas và điều khiển thiết bị trong kho
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => navigate('/devices')}
-            className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition-colors"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 shadow-sm transition-colors"
           >
-            <Cpu className="w-3.5 h-3.5" />
+            <Cpu className="w-4 h-4 text-emerald-600" />
             <span>Quản lý Thiết bị</span>
             {totalDiscoveredCount > 0 && (
-              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-slate-950 animate-pulse">
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-white">
                 +{totalDiscoveredCount} mới
               </span>
             )}
           </button>
           <button
             onClick={fetchData}
-            className="self-start sm:self-auto flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+            disabled={isLoading}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 shadow-sm transition-colors"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
             <span>Làm mới</span>
           </button>
         </div>
       </div>
 
-      {/* 4 KPI Cards (Mục 5.1 & Bước 4) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* KPI 1 */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>Thiết Bị Giám Sát</span>
-            <span className="p-2 rounded-xl bg-blue-500/10 text-blue-400">
+      {/* 3 KPI Cards - Simple & Clear */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+          <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+            <span>Thiết bị theo dõi</span>
+            <span className="p-2 rounded-xl bg-blue-50 text-blue-600">
               <Warehouse className="w-4 h-4" />
             </span>
           </div>
-          <div className="text-2xl font-bold text-slate-100 mt-2">
-            {kpi?.total_devices || devices.length}{' '}
-            <span className="text-xs font-medium text-slate-400 font-normal">nodes</span>
+          <div className="text-2xl font-bold text-slate-900 mt-2">
+            {kpi?.total_devices ?? devices.length}
           </div>
-          <div className="flex items-center gap-3 mt-2 text-xs">
-            <span className="text-emerald-400 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              {kpi?.online_devices || 0} Online
+          <div className="flex items-center gap-3 mt-2 text-xs text-slate-600">
+            <span className="text-emerald-700 font-medium flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              {kpi?.online_devices || 0} trực tuyến
             </span>
-            <span className="text-slate-500">|</span>
-            <span className="text-rose-400 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
-              {kpi?.offline_devices || 0} Offline
-            </span>
+            <span className="text-slate-300">|</span>
+            <span className="text-slate-500">{kpi?.offline_devices || 0} ngoại tuyến</span>
           </div>
         </div>
 
-        {/* KPI 2: Cảnh Báo Chưa Xử Lý - Bấm vào để sang ngay tab /alerts */}
         <div
           onClick={() => navigate('/alerts')}
-          className="bg-slate-900 border border-slate-800 hover:border-rose-500/60 hover:bg-slate-800/70 rounded-2xl p-4 shadow-sm cursor-pointer transition-all duration-200 group flex flex-col justify-between"
-          title="Nhấn để chuyển sang Trung tâm Cảnh báo"
+          className="bg-white border border-slate-200 hover:border-rose-300 rounded-2xl p-4 shadow-sm cursor-pointer transition-all group flex flex-col justify-between"
         >
           <div>
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span className="group-hover:text-rose-300 font-medium transition">Cảnh Báo Chưa Xử Lý</span>
-              <span className="p-2 rounded-xl bg-rose-500/10 text-rose-400 group-hover:bg-rose-500/20 group-hover:scale-105 transition">
+            <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+              <span className="group-hover:text-rose-700 transition">Cảnh báo chưa xử lý</span>
+              <span className="p-2 rounded-xl bg-rose-50 text-rose-600">
                 <AlertTriangle className="w-4 h-4" />
               </span>
             </div>
-            <div className="text-2xl font-bold text-rose-400 mt-2 flex items-baseline gap-1.5">
-              <span>{kpi?.new_alerts_count || 0}</span>
-              <span className="text-xs font-normal text-slate-400">mới</span>
+            <div className="text-2xl font-bold text-rose-600 mt-2">
+              {kpi?.new_alerts_count || 0}
             </div>
           </div>
-          <div className="text-xs text-slate-400 mt-2 flex items-center justify-between">
-            <span>Yêu cầu xác nhận &amp; xử lý</span>
-            <span className="text-rose-400 group-hover:translate-x-1 transition flex items-center gap-0.5 text-[11px] font-semibold">
-              Xem ngay &rarr;
+          <div className="text-xs text-slate-500 mt-2 flex items-center justify-between">
+            <span>Nhấn để xem chi tiết</span>
+            <span className="text-rose-600 font-semibold group-hover:translate-x-0.5 transition">
+              Xem &rarr;
             </span>
           </div>
         </div>
 
-        {/* KPI 3 */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>Độ Ẩm TB (RH / EMC)</span>
-            <span className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400">
-              <Droplets className="w-4 h-4" />
-            </span>
-          </div>
-          <div className="text-2xl font-bold text-slate-100 mt-2">
-            {kpi?.avg_humidity || 0}%{' '}
-            <span className="text-sm font-semibold text-emerald-400">
-              / {kpi?.avg_emc || 0}% MC
-            </span>
-          </div>
-          <div className="text-xs text-slate-400 mt-2">
-            Giới hạn an toàn TCVN: &le; 14.0% MC
-          </div>
-        </div>
-
-        {/* KPI 4 */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>Quạt Thông Gió</span>
-            <span className="p-2 rounded-xl bg-amber-500/10 text-amber-400">
+        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+          <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+            <span>Quạt đang hoạt động</span>
+            <span className="p-2 rounded-xl bg-amber-50 text-amber-600">
               <Fan className="w-4 h-4" />
             </span>
           </div>
-          <div className="text-2xl font-bold text-amber-400 mt-2">
-            {kpi?.active_fans_count || 0}{' '}
-            <span className="text-xs font-normal text-slate-400">đang chạy</span>
+          <div className="text-2xl font-bold text-amber-600 mt-2">
+            {kpi?.active_fans_count || 0}
           </div>
-          <div className="text-xs text-slate-400 mt-2">
-            Tự động đối lưu khi vượt ngưỡng EMC
-          </div>
+          <div className="text-xs text-slate-500 mt-2">Tự động chạy khi độ ẩm tăng</div>
         </div>
       </div>
 
-      {/* Grid Danh Sách Thiết Bị Vi Khí Hậu */}
+      {/* Device Cards List */}
       <div className="space-y-3">
-        <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-          <Warehouse className="w-4 h-4 text-amber-400" />
-          <span>Danh Sách Silo &amp; Node Cảm Biến Thời Gian Thực</span>
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+            <Warehouse className="w-4 h-4 text-emerald-600" />
+            <span>Các khu vực &amp; thiết bị giám sát</span>
+          </h2>
+          {isAdmin && (
+            <span className="text-xs text-slate-500">
+              Bấm vào &ldquo;Chi tiết &amp; Ngoại vi&rdquo; để xóa hoặc thêm cảm biến, quạt, còi
+            </span>
+          )}
+        </div>
 
         {activeDashboardDevices.length === 0 ? (
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center text-slate-400">
-            <Warehouse className="w-12 h-12 mx-auto text-slate-600 mb-3" />
-            <div className="font-semibold text-slate-200 text-base">
-              {devices.length === 0 ? 'Chưa có thiết bị nào được đăng ký' : 'Không có thiết bị đang hoạt động'}
+          <div className="bg-white border border-slate-200 rounded-3xl p-8 text-center text-slate-500 shadow-sm">
+            <Warehouse className="w-12 h-12 mx-auto text-slate-300 mb-3" />
+            <div className="font-semibold text-slate-800 text-base">
+              Chưa có thiết bị nào đang hoạt động
             </div>
             <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-              Bấm vào &ldquo;Quản lý Thiết bị&rdquo; để Onboard node mới hoặc khôi phục node đã thu hồi.
+              Vào mục Quản lý Thiết bị để thêm mạch mới hoặc kích hoạt lại thiết bị.
             </p>
             <div className="mt-4 flex items-center justify-center gap-2">
               <button
                 onClick={() => navigate('/devices')}
-                className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg shadow-amber-500/20 transition"
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-sm transition"
               >
                 Đi tới Quản lý Thiết bị
-              </button>
-              <button
-                onClick={fetchData}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl border border-slate-700 transition"
-              >
-                Tải lại
               </button>
             </div>
           </div>
         ) : (
-          <>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {activeDashboardDevices.map((device) => {
-            // Lấy telemetry mới nhất từ WebSocket nếu có, fallback vào DB
-            const wsData = latestTelemetry[device.device_code];
-            const wsStatus = deviceStatus[device.device_code];
-            const isOnline = wsStatus ? wsStatus.state !== 'OFFLINE' : device.is_online;
-            const liveIp = wsData?.ip_address ?? wsStatus?.ip_address ?? device.ip_address;
-            const liveMac = wsData?.mac_address ?? wsStatus?.mac_address ?? device.mac_address;
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {activeDashboardDevices.map((device) => {
+              const wsData = latestTelemetry[device.device_code];
+              const wsStatus = deviceStatus[device.device_code];
+              const isOnline = wsStatus ? wsStatus.state !== 'OFFLINE' : device.is_online;
 
-            const latestDbLog = device.telemetry_logs?.[0];
-            const hasTelemetry = Boolean(wsData || latestDbLog);
+              const latestDbLog = device.telemetry_logs?.[0];
+              const hasTelemetry = Boolean(wsData || latestDbLog);
 
-            const temp: number | null = wsData ? wsData.temperature : latestDbLog?.temperature ?? null;
-            const rh: number | null = wsData ? wsData.humidity_air : latestDbLog?.humidity_air ?? null;
-            const gas: number | null = wsData ? wsData.gas_ppm : latestDbLog?.gas_ppm ?? null;
-            const emc: number | null = wsData ? wsData.estimated_emc : latestDbLog?.estimated_emc ?? null;
+              const temp: number | null = wsData ? wsData.temperature : latestDbLog?.temperature ?? null;
+              const rh: number | null = wsData ? wsData.humidity_air : latestDbLog?.humidity_air ?? null;
+              const gas: number | null = wsData ? wsData.gas_ppm : latestDbLog?.gas_ppm ?? null;
+              const emc: number | null = wsData ? wsData.estimated_emc : latestDbLog?.estimated_emc ?? null;
 
-            const fanActive = wsData
-              ? wsData.fan_state === 'ON'
-              : latestDbLog?.fan_state ?? false;
+              const fanActive = wsData ? wsData.fan_state === 'ON' : latestDbLog?.fan_state ?? false;
+              const currentRisk = wsData ? wsData.risk_level : latestDbLog?.risk_level ?? 'SAFE';
+              const buzzerActive = wsData ? wsData.buzzer_state === 'ON' : currentRisk === 'HIGH_RISK';
 
-            const currentRisk = wsData
-              ? wsData.risk_level
-              : latestDbLog?.risk_level ?? 'SAFE';
+              const fanPending = pendingCommands[`${device.device_code}:VENTILATION_FAN`];
+              const buzzerPending = pendingCommands[`${device.device_code}:ALARM_BUZZER`];
 
-            const buzzerActive = wsData
-              ? wsData.buzzer_state === 'ON'
-              : currentRisk === 'HIGH_RISK';
+              const periph = normalizePeripherals((device.config_json as any)?.peripherals);
+              const ahtEnabled = periph.aht20_enabled && wsData?.sensor_health?.aht20?.status !== 'DISABLED';
+              const mqEnabled = periph.mq135_enabled && wsData?.sensor_health?.mq135?.status !== 'DISABLED';
+              const fanEnabled = periph.fan_enabled;
+              const buzzerEnabled = periph.buzzer_enabled;
 
-            const fanPending = pendingCommands[`${device.device_code}:VENTILATION_FAN`];
-            const buzzerPending = pendingCommands[`${device.device_code}:ALARM_BUZZER`];
+              const sensorHealth = wsData?.sensor_health ?? device.sensor_health;
+              const doorOpen = wsData?.door_open ?? device.door_open;
+              const aht20Ok = !ahtEnabled || (sensorHealth?.aht20 ? sensorHealth.aht20.ok : true);
+              const mq135Ok = !mqEnabled || (sensorHealth?.mq135 ? sensorHealth.mq135.ok : true);
 
-            const periph = (device.config_json as any)?.peripherals || {};
-            const ahtEnabled =
-              periph.aht20_enabled !== false && wsData?.sensor_health?.aht20?.status !== 'DISABLED';
-            const mqEnabled =
-              periph.mq135_enabled !== false && wsData?.sensor_health?.mq135?.status !== 'DISABLED';
-            const fanEnabled = periph.fan_enabled !== false;
-            const buzzerEnabled = periph.buzzer_enabled !== false;
+              const lastTelemetryTime = latestDbLog?.recorded_at || device.last_seen_at;
+              const formattedLastSeen = lastTelemetryTime
+                ? new Date(lastTelemetryTime).toLocaleString('vi-VN', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    day: '2-digit',
+                    month: '2-digit',
+                  })
+                : null;
 
-            const sensorHealth = wsData?.sensor_health ?? device.sensor_health;
-            const doorOpen = wsData?.door_open ?? device.door_open;
-            const aht20Ok = !ahtEnabled || (sensorHealth?.aht20 ? sensorHealth.aht20.ok : true);
-            const mq135Ok = !mqEnabled || (sensorHealth?.mq135 ? sensorHealth.mq135.ok : true);
-            const aht20Sim = ahtEnabled && sensorHealth?.aht20?.status === 'SIMULATED';
-            const mq135Sim = mqEnabled && sensorHealth?.mq135?.status === 'SIMULATED';
-            const sensorFaultCount =
-              sensorHealth?.fault_count ??
-              ((ahtEnabled && !aht20Ok ? 1 : 0) + (mqEnabled && !mq135Ok ? 1 : 0));
+              const cfg = (device.config_json as any) || {};
+              const tempWarnThreshold =
+                typeof cfg.temp_warn_threshold === 'number' ? cfg.temp_warn_threshold : 25.0;
+              const tempCritThreshold =
+                typeof cfg.temp_crit_threshold === 'number' ? cfg.temp_crit_threshold : 28.0;
+              const humWarnThreshold =
+                typeof cfg.hum_warn_threshold === 'number' ? cfg.hum_warn_threshold : 65.0;
+              const humCritThreshold =
+                typeof cfg.hum_crit_threshold === 'number' ? cfg.hum_crit_threshold : 70.0;
+              const gasWarnThreshold =
+                typeof cfg.gas_warn_threshold === 'number' ? cfg.gas_warn_threshold : 600;
+              const gasCritThreshold =
+                typeof cfg.gas_crit_threshold === 'number' ? cfg.gas_crit_threshold : 700;
 
-            const lastTelemetryTime = latestDbLog?.recorded_at || device.last_seen_at;
-            const formattedLastSeen = lastTelemetryTime
-              ? new Date(lastTelemetryTime).toLocaleString('vi-VN', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  second: '2-digit',
-                  day: '2-digit',
-                  month: '2-digit',
-                })
-              : null;
+              const isTempCrit =
+                isOnline && hasTelemetry && ahtEnabled && aht20Ok && temp !== null && temp >= tempCritThreshold;
+              const isTempWarn =
+                isOnline && hasTelemetry && ahtEnabled && aht20Ok && temp !== null && temp >= tempWarnThreshold;
+              const isRhCrit =
+                isOnline && hasTelemetry && ahtEnabled && aht20Ok && rh !== null && rh >= humCritThreshold;
+              const isRhWarn =
+                isOnline && hasTelemetry && ahtEnabled && aht20Ok && rh !== null && rh >= humWarnThreshold;
+              const isEmcCrit = isOnline && hasTelemetry && ahtEnabled && aht20Ok && emc !== null && emc >= 14.8;
+              const isEmcWarn = isOnline && hasTelemetry && ahtEnabled && aht20Ok && emc !== null && emc >= 14.0;
+              const isGasCrit =
+                isOnline && hasTelemetry && mqEnabled && mq135Ok && gas !== null && gas >= gasCritThreshold;
+              const isGasWarn =
+                isOnline && hasTelemetry && mqEnabled && mq135Ok && gas !== null && gas >= gasWarnThreshold;
 
-            return (
-              <div
-                key={device.id}
-                className={`border rounded-3xl p-5 shadow-lg relative overflow-hidden flex flex-col justify-between transition-all ${
-                  !isOnline
-                    ? 'bg-slate-900/65 border-slate-800/80 opacity-80'
-                    : sensorFaultCount > 0
-                    ? 'bg-slate-900 border-rose-500/40'
-                    : 'bg-slate-900 border-slate-800'
-                }`}
-              >
-                {/* Header card */}
-                <div>
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-bold text-slate-100 text-base">{device.name}</h3>
-                        <span className="text-xs font-mono text-slate-400">({device.device_code})</span>
+              const customConfigs: CustomPeripheralConfig[] = Array.isArray(
+                (device.config_json as any)?.custom_peripherals
+              )
+                ? (device.config_json as any).custom_peripherals
+                : [];
+              const customRuntimeList: CustomPeripheralRuntimeState[] =
+                wsData?.custom_peripherals ?? device.custom_peripherals ?? [];
+              const customSensors = customConfigs.filter((c) => c.type !== 'RELAY_OUTPUT');
+              const customRelays = customConfigs.filter((c) => c.type === 'RELAY_OUTPUT');
+
+              const metricCount = (ahtEnabled ? 3 : 0) + (mqEnabled ? 1 : 0) + customSensors.length;
+              const metricsGridClass =
+                metricCount <= 1 ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2';
+
+              const hiddenCount = [
+                !periph.aht20_enabled,
+                !periph.mq135_enabled,
+                !periph.door_enabled,
+                !periph.fan_enabled,
+                !periph.buzzer_enabled,
+              ].filter(Boolean).length;
+
+              return (
+                <div
+                  key={device.id}
+                  className={`bg-white border rounded-3xl p-5 shadow-sm flex flex-col justify-between transition-all ${
+                    !isOnline
+                      ? 'border-slate-200 bg-slate-50/70 opacity-85'
+                      : 'border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div>
+                    {/* Header Card */}
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="font-bold text-slate-900 text-base">{device.name}</h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {device.zone?.name || 'Chưa gán khu vực'}
+                        </p>
                       </div>
-                      <p className="text-xs text-slate-400 mt-0.5 flex flex-wrap items-center gap-x-2">
-                        <span>
-                          Khu vực: <span className="text-slate-300 font-medium">{device.zone?.name}</span>
-                        </span>
-                        {(liveIp || liveMac) && (
-                          <span className="font-mono text-[11px] text-sky-300/90">
-                            | {liveIp ? `IP ${liveIp}` : ''}{liveIp && liveMac ? ' · ' : ''}{liveMac || ''}
-                          </span>
-                        )}
-                      </p>
-                    </div>
 
-                    <div className="flex flex-col items-end gap-1.5">
-                      <span
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
-                          isOnline
-                            ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
-                            : 'bg-rose-500/10 text-rose-300 border-rose-500/30'
-                        }`}
-                      >
+                      <div className="flex items-center gap-2 flex-wrap justify-end">
                         <span
-                          className={`w-2 h-2 rounded-full ${
-                            isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${
+                            isOnline
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : 'bg-slate-100 text-slate-600 border-slate-200'
                           }`}
-                        />
-                        {isOnline ? 'ONLINE' : 'OFFLINE'}
-                      </span>
-                      <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                        {sensorFaultCount > 0 && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse">
-                            <AlertOctagon className="w-3 h-3" />
-                            LỖI CẢM BIẾN ({sensorFaultCount})
-                          </span>
-                        )}
+                        >
+                          <span
+                            className={`w-2 h-2 rounded-full ${
+                              isOnline ? 'bg-emerald-500' : 'bg-slate-400'
+                            }`}
+                          />
+                          {isOnline ? 'Trực tuyến' : 'Ngoại tuyến'}
+                        </span>
                         <RiskBadge risk={currentRisk} />
                       </div>
                     </div>
-                  </div>
 
-                  {/* 4 Sensor Metric Boxes với chuyển màu Đỏ (CRITICAL) / Vàng (WARNING) theo ngưỡng TCVN 8370 */}
-                  {!isOnline && hasTelemetry && (
-                    <div className="mt-4 px-3 py-1.5 rounded-xl bg-slate-950/80 border border-slate-800 flex items-center justify-between gap-2 text-[11px] text-slate-400">
-                      <span className="flex items-center gap-1.5 font-medium text-amber-300/90">
-                        <Clock className="w-3.5 h-3.5 text-amber-400/90 shrink-0" />
-                        <span>Thiết bị đang OFFLINE — Dữ liệu lưu lần cuối</span>
-                      </span>
-                      {formattedLastSeen && (
-                        <span className="font-mono text-slate-300 shrink-0">{formattedLastSeen}</span>
-                      )}
-                    </div>
-                  )}
-
-                  {(() => {
-                    const isTempCrit = isOnline && hasTelemetry && ahtEnabled && aht20Ok && temp !== null && temp > 28.0;
-                    const isTempWarn = isOnline && hasTelemetry && ahtEnabled && aht20Ok && temp !== null && temp > 25.0;
-
-                    const isRhCrit = isOnline && hasTelemetry && ahtEnabled && aht20Ok && rh !== null && rh > 70.0;
-                    const isRhWarn = isOnline && hasTelemetry && ahtEnabled && aht20Ok && rh !== null && rh > 65.0;
-
-                    const isEmcCrit = isOnline && hasTelemetry && ahtEnabled && aht20Ok && emc !== null && emc > 14.8;
-                    const isEmcWarn = isOnline && hasTelemetry && ahtEnabled && aht20Ok && emc !== null && emc > 14.0;
-
-                    const isGasCrit = isOnline && hasTelemetry && mqEnabled && mq135Ok && gas !== null && gas >= 700.0;
-                    const isGasWarn = isOnline && hasTelemetry && mqEnabled && mq135Ok && gas !== null && gas >= 600.0;
-
-                    return (
-                      <div className={`grid grid-cols-2 sm:grid-cols-4 gap-2.5 ${!isOnline && hasTelemetry ? 'mt-2.5' : 'mt-5'}`}>
-                        {/* Nhiệt độ */}
-                        <div
-                          className={`p-3 rounded-2xl border transition-all duration-300 ${
-                            !ahtEnabled
-                              ? 'bg-slate-950/40 border-slate-800/60 border-dashed opacity-70'
-                              : !aht20Ok
-                              ? 'bg-rose-950/20 border-rose-500/50 border-dashed'
-                              : isTempCrit
-                              ? 'bg-rose-500/15 border-rose-500/60 shadow-lg shadow-rose-500/20'
-                              : isTempWarn
-                              ? 'bg-amber-500/10 border-amber-500/50'
-                              : 'bg-slate-950/60 border-slate-800/80'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between text-xs text-slate-400">
-                            <div className="flex items-center gap-1.5">
-                              <Thermometer
-                                className={`w-3.5 h-3.5 ${
-                                  !ahtEnabled
-                                    ? 'text-slate-500'
-                                    : !aht20Ok || isTempCrit
-                                    ? 'text-rose-400'
-                                    : isTempWarn
-                                    ? 'text-amber-400'
-                                    : 'text-slate-400'
-                                }`}
-                              />
-                              <span>Nhiệt độ</span>
-                            </div>
-                            {!ahtEnabled ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">
-                                ĐÃ TẮT
-                              </span>
-                            ) : !aht20Ok ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40">
-                                LỖI AHT20
-                              </span>
-                            ) : aht20Sim ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300">
-                                MÔ PHỎNG
-                              </span>
-                            ) : isTempCrit ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-rose-500 text-slate-950 animate-pulse">
-                                NGUY CẤP
-                              </span>
-                            ) : isTempWarn ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                                BÁO ĐỘNG
-                              </span>
-                            ) : null}
-                          </div>
-                          <div
-                            className={`text-xl font-bold mt-1 ${
-                              !ahtEnabled
-                                ? 'text-slate-500'
-                                : !aht20Ok
-                                ? 'text-rose-400'
-                                : isTempCrit
-                                ? 'text-rose-400 font-extrabold animate-pulse'
-                                : isTempWarn
-                                ? 'text-amber-400'
-                                : 'text-slate-100'
-                            }`}
-                          >
-                            {ahtEnabled && aht20Ok && temp !== null ? `${temp}°C` : '--°C'}
-                          </div>
-                          <div className="text-[10px] text-slate-500 mt-0.5">
-                            {!ahtEnabled
-                              ? 'Đã tắt theo dõi module'
-                              : !aht20Ok
-                              ? 'Không nhận I2C 0x38'
-                              : temp === null
-                              ? 'Chờ gói tin từ node'
-                              : 'Mục tiêu ≤ 25°C'}
-                          </div>
-                        </div>
-
-                        {/* Độ ẩm không khí RH */}
-                        <div
-                          className={`p-3 rounded-2xl border transition-all duration-300 ${
-                            !ahtEnabled
-                              ? 'bg-slate-950/40 border-slate-800/60 border-dashed opacity-70'
-                              : !aht20Ok
-                              ? 'bg-rose-950/20 border-rose-500/50 border-dashed'
-                              : isRhCrit
-                              ? 'bg-rose-500/15 border-rose-500/60 shadow-lg shadow-rose-500/20'
-                              : isRhWarn
-                              ? 'bg-amber-500/10 border-amber-500/50'
-                              : 'bg-slate-950/60 border-slate-800/80'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between text-xs text-slate-400">
-                            <div className="flex items-center gap-1.5">
-                              <Droplets
-                                className={`w-3.5 h-3.5 ${
-                                  !ahtEnabled
-                                    ? 'text-slate-500'
-                                    : !aht20Ok || isRhCrit
-                                    ? 'text-rose-400'
-                                    : isRhWarn
-                                    ? 'text-amber-400'
-                                    : 'text-blue-400'
-                                }`}
-                              />
-                              <span>Độ ẩm RH</span>
-                            </div>
-                            {!ahtEnabled ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">
-                                ĐÃ TẮT
-                              </span>
-                            ) : !aht20Ok ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40">
-                                LỖI AHT20
-                              </span>
-                            ) : isRhCrit ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-rose-500 text-slate-950 animate-pulse">
-                                ẨM TRẦN
-                              </span>
-                            ) : isRhWarn ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                                CẢNH BÁO
-                              </span>
-                            ) : null}
-                          </div>
-                          <div
-                            className={`text-xl font-bold mt-1 ${
-                              !ahtEnabled
-                                ? 'text-slate-500'
-                                : !aht20Ok
-                                ? 'text-rose-400'
-                                : isRhCrit
-                                ? 'text-rose-400 font-extrabold animate-pulse'
-                                : isRhWarn
-                                ? 'text-amber-400'
-                                : 'text-slate-100'
-                            }`}
-                          >
-                            {ahtEnabled && aht20Ok && rh !== null ? `${rh}%` : '--%'}
-                          </div>
-                          <div className="text-[10px] text-slate-500 mt-0.5">
-                            {!ahtEnabled
-                              ? 'Đã tắt theo dõi module'
-                              : !aht20Ok
-                              ? 'Chờ kết nối AHT20'
-                              : rh === null
-                              ? 'Chờ gói tin từ node'
-                              : 'Giới hạn ≤ 65%'}
-                          </div>
-                        </div>
-
-                        {/* Độ ẩm cân bằng thóc EMC */}
-                        <div
-                          className={`p-3 rounded-2xl border transition-all duration-300 ${
-                            !ahtEnabled
-                              ? 'bg-slate-950/40 border-slate-800/60 border-dashed opacity-70'
-                              : !aht20Ok
-                              ? 'bg-rose-950/20 border-rose-500/50 border-dashed'
-                              : isEmcCrit
-                              ? 'bg-rose-500/15 border-rose-500/60 shadow-lg shadow-rose-500/20'
-                              : isEmcWarn
-                              ? 'bg-amber-500/10 border-amber-500/50'
-                              : 'bg-slate-950/60 border-slate-800/80'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between text-xs text-slate-400">
-                            <div className="flex items-center gap-1.5">
-                              <Wind
-                                className={`w-3.5 h-3.5 ${
-                                  !ahtEnabled
-                                    ? 'text-slate-500'
-                                    : !aht20Ok || isEmcCrit
-                                    ? 'text-rose-400'
-                                    : isEmcWarn
-                                    ? 'text-amber-400'
-                                    : 'text-emerald-400'
-                                }`}
-                              />
-                              <span>Độ ẩm EMC</span>
-                            </div>
-                            {!ahtEnabled ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">
-                                ĐÃ TẮT
-                              </span>
-                            ) : !aht20Ok ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40">
-                                THIẾU AHT20
-                              </span>
-                            ) : isEmcCrit ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-rose-500 text-slate-950 animate-pulse">
-                                NGUY HẠI
-                              </span>
-                            ) : isEmcWarn ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                                CHÚ Ý
-                              </span>
-                            ) : null}
-                          </div>
-                          <div
-                            className={`text-xl font-bold mt-1 ${
-                              !ahtEnabled
-                                ? 'text-slate-500'
-                                : !aht20Ok
-                                ? 'text-rose-400'
-                                : isEmcCrit
-                                ? 'text-rose-400 font-extrabold animate-pulse'
-                                : isEmcWarn
-                                ? 'text-amber-400'
-                                : 'text-emerald-300'
-                            }`}
-                          >
-                            {ahtEnabled && aht20Ok && emc !== null ? `${emc}%` : '--%'}
-                          </div>
-                          <div className="text-[10px] text-slate-500 mt-0.5">
-                            {!ahtEnabled
-                              ? 'Đã tắt theo dõi module'
-                              : !aht20Ok
-                              ? 'Cần dữ liệu AHT20'
-                              : emc === null
-                              ? 'Chờ gói tin từ node'
-                              : 'TCVN ≤ 14.0%'}
-                          </div>
-                        </div>
-
-                        {/* Khí Gas MQ-135 */}
-                        <div
-                          className={`p-3 rounded-2xl border transition-all duration-300 ${
-                            !mqEnabled
-                              ? 'bg-slate-950/40 border-slate-800/60 border-dashed opacity-70'
-                              : !mq135Ok
-                              ? 'bg-rose-950/20 border-rose-500/50 border-dashed'
-                              : isGasCrit
-                              ? 'bg-rose-500/15 border-rose-500/60 shadow-lg shadow-rose-500/20'
-                              : isGasWarn
-                              ? 'bg-amber-500/10 border-amber-500/50'
-                              : 'bg-slate-950/60 border-slate-800/80'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between text-xs text-slate-400">
-                            <div className="flex items-center gap-1.5">
-                              <Flame
-                                className={`w-3.5 h-3.5 ${
-                                  !mqEnabled
-                                    ? 'text-slate-500'
-                                    : !mq135Ok || isGasCrit
-                                    ? 'text-rose-400'
-                                    : isGasWarn
-                                    ? 'text-amber-400'
-                                    : 'text-purple-400'
-                                }`}
-                              />
-                              <span>Khí Gas</span>
-                            </div>
-                            {!mqEnabled ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">
-                                ĐÃ TẮT
-                              </span>
-                            ) : !mq135Ok ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40">
-                                LỖI MQ-135
-                              </span>
-                            ) : mq135Sim ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300">
-                                MÔ PHỎNG
-                              </span>
-                            ) : isGasCrit ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-rose-500 text-slate-950 animate-pulse">
-                                LÊN MEN
-                              </span>
-                            ) : isGasWarn ? (
-                              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                                BÁO ĐỘNG
-                              </span>
-                            ) : null}
-                          </div>
-                          <div
-                            className={`text-xl font-bold mt-1 ${
-                              !mqEnabled
-                                ? 'text-slate-500'
-                                : !mq135Ok
-                                ? 'text-rose-400'
-                                : isGasCrit
-                                ? 'text-rose-400 font-extrabold animate-pulse'
-                                : isGasWarn
-                                ? 'text-amber-400'
-                                : 'text-slate-100'
-                            }`}
-                          >
-                            {mqEnabled && mq135Ok && gas !== null ? gas : '--'}
-                          </div>
-                          <div className="text-[10px] text-slate-500 mt-0.5">
-                            {!mqEnabled
-                              ? 'Đã tắt theo dõi module'
-                              : !mq135Ok
-                              ? `ADC: ${sensorHealth?.mq135?.raw_adc ?? 0} (Mất tín hiệu)`
-                              : gas === null
-                              ? 'Chờ gói tin từ node'
-                              : '< 600 ppm'}
-                          </div>
-                        </div>
+                    {/* Offline Banner */}
+                    {!isOnline && hasTelemetry && (
+                      <div className="mt-4 px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between gap-2 text-xs text-amber-800">
+                        <span className="flex items-center gap-1.5 font-medium">
+                          <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span>Thiết bị ngoại tuyến — Dữ liệu lưu lần cuối</span>
+                        </span>
+                        {formattedLastSeen && (
+                          <span className="font-medium text-amber-700 shrink-0">
+                            {formattedLastSeen}
+                          </span>
+                        )}
                       </div>
-                    );
-                  })()}
+                    )}
 
-                  {/* Bảng chẩn đoán phần cứng từng cảm biến */}
-                  <SensorHealthPanel
-                    sensorHealth={sensorHealth}
-                    doorOpen={doorOpen}
-                    isOnline={isOnline}
-                    variant="compact"
-                  />
-                </div>
-
-                {/* Footer Controls: Fan toggle, Buzzer test & Details button */}
-                <div className="mt-5 pt-4 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3">
-                  {/* Fan Switch */}
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      disabled={!fanEnabled || !isOnline || isViewer}
-                      onClick={() => handleToggleActuator(device, 'VENTILATION_FAN', fanActive)}
-                      className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors focus:outline-none border border-slate-600/50 ${
-                        !fanEnabled || !isOnline || isViewer
-                          ? 'bg-slate-800 opacity-50 cursor-not-allowed'
-                          : fanActive
-                          ? 'bg-amber-500 cursor-pointer'
-                          : 'bg-slate-700 cursor-pointer'
-                      }`}
-                      title={
-                        isViewer
-                          ? 'Vai trò Giám sát / QC chỉ có quyền xem'
-                          : !isOnline
-                          ? 'Thiết bị đang OFFLINE, không thể điều khiển'
-                          : !fanEnabled
-                          ? 'Quạt đang bị tắt trong Quản lý Module'
-                          : fanActive
-                          ? 'Bấm để Tắt quạt'
-                          : 'Bấm để Bật quạt'
-                      }
-                    >
-                      <span
-                        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform ${
-                          fanEnabled && fanActive ? 'translate-x-8' : 'translate-x-1'
+                    {/* Temperature Threshold Alert Banner */}
+                    {isOnline && (isTempCrit || isTempWarn) && (
+                      <div
+                        className={`mt-4 px-3 py-2 rounded-xl border flex items-center justify-between gap-2 text-xs font-medium ${
+                          isTempCrit
+                            ? 'bg-rose-50 border-rose-200 text-rose-800'
+                            : 'bg-amber-50 border-amber-200 text-amber-800'
                         }`}
-                      />
-                    </button>
-
-                    <div className="text-xs">
-                      <div className="font-semibold text-slate-200 flex items-center gap-1.5">
-                        <Fan className={`w-3.5 h-3.5 ${isOnline && fanEnabled && fanActive ? 'text-amber-400 animate-spin' : 'text-slate-500'}`} />
-                        <span>Quạt thông gió:</span>
-                        <span className={!fanEnabled ? 'text-slate-500' : !isOnline ? 'text-slate-400' : fanActive ? 'text-amber-300 font-bold' : 'text-slate-400'}>
-                          {!fanEnabled ? 'ĐÃ TẮT MODULE' : fanActive ? 'BẬT (ON)' : 'TẮT (OFF)'}
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <Thermometer
+                            className={`w-3.5 h-3.5 shrink-0 ${
+                              isTempCrit ? 'text-rose-600' : 'text-amber-600'
+                            }`}
+                          />
+                          <span>
+                            {isTempCrit
+                              ? `Nhiệt độ đạt ngưỡng nguy hiểm (${temp}°C ≥ ${tempCritThreshold}°C)`
+                              : `Nhiệt độ đạt ngưỡng cảnh báo (${temp}°C ≥ ${tempWarnThreshold}°C)`}
+                          </span>
                         </span>
                       </div>
+                    )}
 
-                      {/* Hiển thị hiệu ứng chờ Pending ACK... (Mục 5.1 & Bước 5) */}
-                      {fanPending && (
-                        <div className="text-[11px] text-amber-400 animate-pulse flex items-center gap-1 mt-0.5 font-medium">
-                          <Clock className="w-3 h-3 animate-spin" />
-                          <span>Chờ phản hồi Pending ACK... &rarr; Active</span>
-                        </div>
-                      )}
-                    </div>
+                    {/* Visible Sensor Metrics (Chỉ hiện các cảm biến đang gắn) */}
+                    {metricCount === 0 ? (
+                      <div className="mt-4 p-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-between gap-3 text-xs text-slate-500">
+                        <span>Node này hiện đã gỡ hết cảm biến đo lường.</span>
+                        <button
+                          onClick={() => navigate(`/devices/${device.id}`)}
+                          className="inline-flex items-center gap-1 font-semibold text-emerald-700 hover:text-emerald-800 shrink-0"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Thêm cảm biến
+                        </button>
+                      </div>
+                    ) : (
+                      <div className={`grid ${metricsGridClass} gap-3 ${!isOnline && hasTelemetry ? 'mt-3' : 'mt-5'}`}>
+                        {ahtEnabled && (
+                          <>
+                            {/* Nhiệt độ */}
+                            <div
+                              className={`p-3.5 rounded-2xl border transition-all ${
+                                !aht20Ok
+                                  ? 'bg-rose-50/70 border-rose-200'
+                                  : isTempCrit
+                                  ? 'bg-rose-50 border-rose-300'
+                                  : isTempWarn
+                                  ? 'bg-amber-50 border-amber-300'
+                                  : 'bg-slate-50 border-slate-200'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between text-xs text-slate-500">
+                                <span className="flex items-center gap-1.5 font-medium">
+                                  <Thermometer className="w-3.5 h-3.5 text-amber-500" />
+                                  Nhiệt độ
+                                </span>
+                                {!aht20Ok ? (
+                                  <span className="text-[10px] font-bold text-rose-600">Lỗi</span>
+                                ) : (
+                                  <span className="text-[11px] font-medium text-slate-400">
+                                    Báo: &ge;{tempWarnThreshold}°C
+                                  </span>
+                                )}
+                              </div>
+                              <div
+                                className={`text-2xl font-bold mt-1.5 ${
+                                  !aht20Ok || isTempCrit
+                                    ? 'text-rose-600'
+                                    : isTempWarn
+                                    ? 'text-amber-600'
+                                    : 'text-slate-900'
+                                }`}
+                              >
+                                {aht20Ok && temp !== null ? `${temp}°C` : '--'}
+                              </div>
+                              {(isTempCrit || isTempWarn || !aht20Ok) && (
+                                <div
+                                  className={`text-[11px] mt-1 font-semibold ${
+                                    !aht20Ok || isTempCrit ? 'text-rose-700' : 'text-amber-700'
+                                  }`}
+                                >
+                                  {!aht20Ok
+                                    ? 'Chưa nhận AHT20'
+                                    : isTempCrit
+                                    ? `Đạt ngưỡng nguy hiểm (≥${tempCritThreshold}°C)`
+                                    : `Đạt ngưỡng cảnh báo (≥${tempWarnThreshold}°C)`}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Độ ẩm không khí */}
+                            <div
+                              className={`p-3.5 rounded-2xl border transition-all ${
+                                !aht20Ok
+                                  ? 'bg-rose-50/70 border-rose-200'
+                                  : isRhCrit
+                                  ? 'bg-rose-50 border-rose-300'
+                                  : isRhWarn
+                                  ? 'bg-amber-50 border-amber-300'
+                                  : 'bg-slate-50 border-slate-200'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between text-xs text-slate-500">
+                                <span className="flex items-center gap-1.5 font-medium">
+                                  <Droplets className="w-3.5 h-3.5 text-sky-500" />
+                                  Độ ẩm
+                                </span>
+                                {!aht20Ok && (
+                                  <span className="text-[10px] font-bold text-rose-600">Lỗi</span>
+                                )}
+                              </div>
+                              <div
+                                className={`text-2xl font-bold mt-1.5 ${
+                                  !aht20Ok || isRhCrit
+                                    ? 'text-rose-600'
+                                    : isRhWarn
+                                    ? 'text-amber-600'
+                                    : 'text-slate-900'
+                                }`}
+                              >
+                                {aht20Ok && rh !== null ? `${rh}%` : '--'}
+                              </div>
+                              {(isRhCrit || isRhWarn || !aht20Ok) && (
+                                <div className="text-[11px] mt-1 font-medium text-rose-600">
+                                  {!aht20Ok ? 'Chưa nhận AHT20' : isRhCrit ? 'Ẩm cao' : 'Cần chú ý'}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Độ ẩm hạt EMC */}
+                            <div
+                              className={`p-3.5 rounded-2xl border transition-all ${
+                                !aht20Ok
+                                  ? 'bg-rose-50/70 border-rose-200'
+                                  : isEmcCrit
+                                  ? 'bg-rose-50 border-rose-300'
+                                  : isEmcWarn
+                                  ? 'bg-amber-50 border-amber-300'
+                                  : 'bg-slate-50 border-slate-200'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between text-xs text-slate-500">
+                                <span className="flex items-center gap-1.5 font-medium">
+                                  <Wind className="w-3.5 h-3.5 text-emerald-600" />
+                                  Ẩm hạt
+                                </span>
+                              </div>
+                              <div
+                                className={`text-2xl font-bold mt-1.5 ${
+                                  !aht20Ok || isEmcCrit
+                                    ? 'text-rose-600'
+                                    : isEmcWarn
+                                    ? 'text-amber-600'
+                                    : 'text-emerald-700'
+                                }`}
+                              >
+                                {aht20Ok && emc !== null ? `${emc}%` : '--'}
+                              </div>
+                              {(isEmcCrit || isEmcWarn) && (
+                                <div className="text-[11px] mt-1 font-medium text-rose-600">
+                                  {isEmcCrit ? 'Vượt chuẩn' : 'Gần ngưỡng'}
+                                </div>
+                              )}
+                            </div>
+                          </>
+                        )}
+
+                        {mqEnabled && (
+                          <div
+                            className={`p-3.5 rounded-2xl border transition-all ${
+                              !mq135Ok
+                                ? 'bg-rose-50/70 border-rose-200'
+                                : isGasCrit
+                                ? 'bg-rose-50 border-rose-300'
+                                : isGasWarn
+                                ? 'bg-amber-50 border-amber-300'
+                                : 'bg-slate-50 border-slate-200'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between text-xs text-slate-500">
+                              <span className="flex items-center gap-1.5 font-medium">
+                                <Flame className="w-3.5 h-3.5 text-purple-600" />
+                                Khí Gas
+                              </span>
+                              {!mq135Ok && (
+                                <span className="text-[10px] font-bold text-rose-600">Lỗi</span>
+                              )}
+                            </div>
+                            <div
+                              className={`text-2xl font-bold mt-1.5 ${
+                                !mq135Ok || isGasCrit
+                                  ? 'text-rose-600'
+                                  : isGasWarn
+                                  ? 'text-amber-600'
+                                  : 'text-slate-900'
+                              }`}
+                            >
+                              {mq135Ok && gas !== null ? `${gas}` : '--'}
+                              {mq135Ok && gas !== null && (
+                                <span className="text-xs font-medium text-slate-500 ml-1">ppm</span>
+                              )}
+                            </div>
+                            {(!mq135Ok || isGasCrit || isGasWarn) && (
+                              <div className="text-[11px] mt-1 font-medium text-rose-600">
+                                {!mq135Ok ? 'Mất tín hiệu' : isGasCrit ? 'Khí cao!' : 'Cảnh báo'}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {customSensors.map((cs) => {
+                          const live = customRuntimeList.find((r) => r.id === cs.id);
+                          const isAnalog = cs.type === 'ANALOG_INPUT';
+                          const isActive = live?.state === 'ACTIVE' || live?.value === 1;
+
+                          return (
+                            <div
+                              key={cs.id}
+                              className="p-3.5 rounded-2xl border bg-sky-50/50 border-sky-200 transition-all"
+                            >
+                              <div className="flex items-center justify-between text-xs text-slate-500">
+                                <span className="flex items-center gap-1.5 font-medium truncate">
+                                  {isAnalog ? (
+                                    <Gauge className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                                  ) : (
+                                    <ToggleRight className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                  )}
+                                  <span className="truncate">{cs.name}</span>
+                                </span>
+                              </div>
+                              <div className="text-xl font-bold mt-1.5 text-slate-900">
+                                {isAnalog ? (
+                                  live?.value !== undefined ? (
+                                    <>
+                                      {live.value}
+                                      <span className="text-xs font-medium text-slate-500 ml-1">
+                                        {cs.unit || '%'}
+                                      </span>
+                                    </>
+                                  ) : (
+                                    '--'
+                                  )
+                                ) : live ? (
+                                  <span className={isActive ? 'text-amber-700' : 'text-emerald-700'}>
+                                    {isActive ? 'Kích hoạt' : 'Bình thường'}
+                                  </span>
+                                ) : (
+                                  '--'
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Compact Sensor Health & Door Badge */}
+                    <SensorHealthPanel
+                      sensorHealth={sensorHealth}
+                      peripherals={periph}
+                      doorOpen={doorOpen}
+                      isOnline={isOnline}
+                      variant="compact"
+                    />
                   </div>
 
-                  {/* Right Actions: Test Buzzer + View Details */}
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      disabled={!buzzerEnabled || !isOnline || isViewer}
-                      onClick={() => handleToggleActuator(device, 'ALARM_BUZZER', buzzerActive)}
-                      className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl transition-all border ${
-                        !buzzerEnabled || !isOnline || isViewer
-                          ? 'bg-slate-900 text-slate-500 border-slate-800 cursor-not-allowed opacity-60'
-                          : buzzerActive
-                          ? 'bg-rose-500 text-white border-rose-400 shadow-lg shadow-rose-500/25 animate-pulse cursor-pointer'
-                          : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700 cursor-pointer'
-                      }`}
-                      title={
-                        isViewer
-                          ? 'Vai trò Giám sát / QC chỉ có quyền xem'
-                          : !isOnline
-                          ? 'Thiết bị đang OFFLINE, không thể điều khiển'
-                          : !buzzerEnabled
-                          ? 'Còi đang bị tắt trong Quản lý Module'
-                          : buzzerActive
-                          ? 'Bấm để Tắt còi'
-                          : 'Bấm để kích hoạt Bật còi (Test Relay 2)'
-                      }
-                    >
-                      <Volume2 className={`w-3.5 h-3.5 ${isOnline && buzzerEnabled && buzzerActive ? 'animate-bounce' : isOnline && buzzerEnabled ? 'text-rose-400' : 'text-slate-500'}`} />
-                      <span>
-                        {!buzzerEnabled
-                          ? 'Còi: Tắt'
-                          : buzzerPending
-                          ? 'Đang chờ ACK...'
-                          : buzzerActive
-                          ? 'Tắt Còi (Đang kêu)'
-                          : 'Test Còi'}
-                      </span>
-                    </button>
+                  {/* Footer Controls (Chỉ hiển thị Quạt / Còi nếu chưa bị gỡ bỏ) */}
+                  <div className="mt-5 pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
+                      {fanEnabled && (
+                        <div className="flex items-center gap-2.5">
+                          <button
+                            type="button"
+                            disabled={!isOnline || isViewer}
+                            onClick={() => handleToggleActuator(device, 'VENTILATION_FAN', fanActive)}
+                            className={`relative inline-flex h-6 w-12 items-center rounded-full transition-colors focus:outline-none ${
+                              !isOnline || isViewer
+                                ? 'bg-slate-200 cursor-not-allowed opacity-60'
+                                : fanActive
+                                ? 'bg-amber-500 cursor-pointer'
+                                : 'bg-slate-300 cursor-pointer'
+                            }`}
+                            title={
+                              isViewer
+                                ? 'Chỉ xem'
+                                : !isOnline
+                                ? 'Thiết bị đang ngoại tuyến'
+                                : fanActive
+                                ? 'Bấm để Tắt quạt'
+                                : 'Bấm để Bật quạt'
+                            }
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                                fanActive ? 'translate-x-7' : 'translate-x-1'
+                              }`}
+                            />
+                          </button>
+
+                          <div className="text-xs">
+                            <div className="font-semibold text-slate-700 flex items-center gap-1.5">
+                              <Fan
+                                className={`w-3.5 h-3.5 ${
+                                  isOnline && fanActive ? 'text-amber-600 animate-spin' : 'text-slate-400'
+                                }`}
+                              />
+                              <span>Quạt:</span>
+                              <span className={fanActive ? 'text-amber-700 font-bold' : 'text-slate-500'}>
+                                {fanPending ? 'Đang gửi...' : fanActive ? 'Đang bật' : 'Đang tắt'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {buzzerEnabled && (
+                        <button
+                          type="button"
+                          disabled={!isOnline || isViewer}
+                          onClick={() => handleToggleActuator(device, 'ALARM_BUZZER', buzzerActive)}
+                          className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl transition-all border ${
+                            !isOnline || isViewer
+                              ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                              : buzzerActive
+                              ? 'bg-rose-600 text-white border-rose-600 shadow-sm cursor-pointer'
+                              : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200 cursor-pointer'
+                          }`}
+                        >
+                          <Volume2 className={`w-3.5 h-3.5 ${isOnline && buzzerActive ? 'animate-bounce' : 'text-rose-500'}`} />
+                          <span>
+                            {buzzerPending
+                              ? 'Đang gửi...'
+                              : buzzerActive
+                              ? 'Còi đang kêu (Tắt)'
+                              : 'Bật thử còi'}
+                          </span>
+                        </button>
+                      )}
+
+                      {customRelays.map((cr) => {
+                        const live = customRuntimeList.find((r) => r.id === cr.id);
+                        const crActive = live?.state === 'ON' || live?.value === 1;
+                        const crPending = pendingCommands[`${device.device_code}:CP:${cr.id}`];
+
+                        return (
+                          <button
+                            key={cr.id}
+                            type="button"
+                            disabled={!isOnline || isViewer}
+                            onClick={() =>
+                              handleToggleActuator(device, 'CUSTOM_PERIPHERAL', crActive, cr)
+                            }
+                            className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl transition-all border ${
+                              !isOnline || isViewer
+                                ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                                : crActive
+                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm cursor-pointer'
+                                : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200 cursor-pointer'
+                            }`}
+                          >
+                            <Power className="w-3.5 h-3.5" />
+                            <span>
+                              {cr.name}:{' '}
+                              {crPending ? 'Đang gửi...' : crActive ? 'Bật' : 'Tắt'}
+                            </span>
+                          </button>
+                        );
+                      })}
+
+                      {!fanEnabled && !buzzerEnabled && customRelays.length === 0 && (
+                        <span className="text-xs text-slate-400">
+                          Đã ẩn Quạt &amp; Còi
+                        </span>
+                      )}
+                    </div>
 
                     <button
                       onClick={() => navigate(`/devices/${device.id}`)}
-                      className="flex items-center gap-1.5 text-xs font-semibold text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 px-3 py-2 rounded-xl transition-colors border border-amber-500/20"
+                      className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-3 py-2 rounded-xl transition-colors border border-emerald-200"
                     >
-                      <span>Chi tiết &amp; Biểu đồ</span>
+                      <span>
+                        {hiddenCount > 0 ? `Chi tiết (+${hiddenCount} đã gỡ)` : 'Chi tiết & Ngoại vi'}
+                      </span>
                       <ArrowRight className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
-              </div>
-            );
-          })}
-            </div>
-            {decommissionedCount > 0 && (
-              <div className="text-xs text-slate-400 bg-slate-900/60 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between">
-                <span>
-                  Đang ẩn <strong className="text-slate-200">{decommissionedCount}</strong> thiết bị đã thu hồi (DECOMMISSIONED) khỏi bảng giám sát.
-                </span>
-                <button
-                  onClick={() => navigate('/devices')}
-                  className="text-amber-400 hover:text-amber-300 font-semibold"
-                >
-                  Xem trong Quản lý Thiết bị &rarr;
-                </button>
-              </div>
-            )}
-          </>
+              );
+            })}
+          </div>
         )}
       </div>
     </div>

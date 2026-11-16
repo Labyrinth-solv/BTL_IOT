@@ -12,6 +12,7 @@ export interface DeviceDiagnostics {
   sensor_health: any;
   door_open?: boolean;
   control_mode?: string;
+  custom_peripherals?: any[];
   ip_address?: string;
   mac_address?: string;
   chip_id?: string;
@@ -304,11 +305,15 @@ export class MQTTService {
     const resolvedMac = payload.mac_address || prevDiag?.mac_address;
     const resolvedChipId = payload.chip_id || prevDiag?.chip_id;
     const resolvedRssi = typeof payload.rssi === 'number' ? payload.rssi : prevDiag?.rssi;
+    const customPeripherals = Array.isArray(payload.custom_peripherals)
+      ? payload.custom_peripherals
+      : prevDiag?.custom_peripherals || [];
 
     this.deviceDiagnostics.set(deviceCode, {
       sensor_health: normalizedHealth,
       door_open: doorOpen,
       control_mode: actuators?.control_mode || 'AUTO',
+      custom_peripherals: customPeripherals,
       ip_address: resolvedIp,
       mac_address: resolvedMac,
       chip_id: resolvedChipId,
@@ -347,6 +352,7 @@ export class MQTTService {
 
     // G. Cập nhật trạng thái thiết bị sang ACTIVE & ONLINE
     const updatedLifecycle =
+      device.lifecycle_state === LifecycleState.REGISTERED ||
       device.lifecycle_state === LifecycleState.PROVISIONED ||
       device.lifecycle_state === LifecycleState.OFFLINE
         ? LifecycleState.ACTIVE
@@ -448,6 +454,7 @@ export class MQTTService {
       door_open: doorOpen,
       control_mode: controlMode,
       sensor_health: normalizedHealth,
+      custom_peripherals: customPeripherals,
       ip_address: resolvedIp,
       mac_address: resolvedMac,
       chip_id: resolvedChipId,
@@ -658,6 +665,7 @@ export class MQTTService {
         sensor_health: prevDiag?.sensor_health ?? null,
         door_open: prevDiag?.door_open,
         control_mode: prevDiag?.control_mode,
+        custom_peripherals: prevDiag?.custom_peripherals,
         ip_address: resolvedIp,
         mac_address: resolvedMac,
         chip_id: resolvedChipId,
@@ -667,6 +675,13 @@ export class MQTTService {
         updated_at: Date.now(),
       });
 
+      const updatedLifecycle =
+        device.lifecycle_state === LifecycleState.REGISTERED ||
+        device.lifecycle_state === LifecycleState.PROVISIONED ||
+        device.lifecycle_state === LifecycleState.OFFLINE
+          ? LifecycleState.ACTIVE
+          : device.lifecycle_state;
+
       await prisma.device.update({
         where: { id: device.id },
         data: {
@@ -674,7 +689,7 @@ export class MQTTService {
           last_seen_at: new Date(),
           fw_version: fw_version || device.fw_version,
           hw_version: hw_version || device.hw_version,
-          lifecycle_state: device.lifecycle_state === LifecycleState.OFFLINE ? LifecycleState.ACTIVE : device.lifecycle_state,
+          lifecycle_state: updatedLifecycle,
         },
       });
 
@@ -683,6 +698,7 @@ export class MQTTService {
         device_db_id: device.id,
         state: 'ONLINE',
         is_online: true,
+        lifecycle_state: updatedLifecycle,
         fw_version: fw_version || device.fw_version,
         hw_version: hw_version || device.hw_version,
         ip_address: resolvedIp,

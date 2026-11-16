@@ -109,12 +109,16 @@ export const api = {
   getZoneById: (id: string) => request<any>(`/zones/${id}`),
   createZone: (body: any) => request<any>('/zones', { method: 'POST', body: JSON.stringify(body) }),
   updateZone: (id: string, body: any) => request<any>(`/zones/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteZone: (id: string) => request<any>(`/zones/${id}`, { method: 'DELETE' }),
 
   // Users
   getUsers: () => request<any>('/users'),
   createUser: (body: any) => request<any>('/users', { method: 'POST', body: JSON.stringify(body) }),
+  updateUser: (id: string, body: any) =>
+    request<any>(`/users/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   updateUserStatus: (id: string, status: string) =>
     request<any>(`/users/${id}/status`, { method: 'PUT', body: JSON.stringify({ status }) }),
+  deleteUser: (id: string) => request<any>(`/users/${id}`, { method: 'DELETE' }),
 
   // Audit Logs
   getAuditLogs: (params?: any) => {

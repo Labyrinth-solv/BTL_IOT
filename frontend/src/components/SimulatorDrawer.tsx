@@ -5,7 +5,6 @@ import { useSocket } from '../context/SocketContext';
 import {
   Cpu,
   X,
-  Play,
   RotateCcw,
   Zap,
   Flame,
@@ -26,9 +25,8 @@ export const SimulatorDrawer: React.FC<SimulatorDrawerProps> = ({ isOpen, onClos
   const { latestTelemetry, deviceStatus } = useSocket();
   const [activeScenario, setActiveScenario] = useState<string>('NORMAL');
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [statusMessage, setStatusMessage] = useState<string>('Bộ giả lập đang chạy chế độ: NORMAL (An toàn)');
+  const [statusMessage, setStatusMessage] = useState<string>('Đang chạy chế độ an toàn');
 
-  // Tra cứu động dữ liệu thời gian thực (ưu tiên node đang online hoặc DEV_SILO_01)
   const activeDeviceCode =
     latestTelemetry['DEV_SILO_01']
       ? 'DEV_SILO_01'
@@ -43,7 +41,7 @@ export const SimulatorDrawer: React.FC<SimulatorDrawerProps> = ({ isOpen, onClos
         if (res.currentScenario) {
           setActiveScenario(res.currentScenario);
         }
-      } catch (e) {}
+      } catch {}
     };
 
     if (isOpen) {
@@ -57,11 +55,11 @@ export const SimulatorDrawer: React.FC<SimulatorDrawerProps> = ({ isOpen, onClos
       const res = await api.setSimulatorScenario(scenario);
       if (res.success) {
         setActiveScenario(scenario);
-        setStatusMessage(`Đã kích hoạt: ${name}`);
-        showToast(`Đã kích hoạt kịch bản: ${name}`, 'success');
+        setStatusMessage(`Đang chạy: ${name}`);
+        showToast(`Đã chọn kịch bản: ${name}`, 'success');
       }
     } catch (err: any) {
-      showToast(err.message || 'Lỗi khi kích hoạt kịch bản', 'error');
+      showToast(err.message || 'Lỗi kích hoạt kịch bản', 'error');
     } finally {
       setIsLoading(false);
     }
@@ -73,8 +71,8 @@ export const SimulatorDrawer: React.FC<SimulatorDrawerProps> = ({ isOpen, onClos
       const res = await api.reconnectSimulator();
       if (res.success) {
         setActiveScenario('NORMAL');
-        setStatusMessage('Đã kết nối lại MQTT Broker thành công');
-        showToast('Đã kết nối lại thiết bị vào MQTT Broker!', 'success');
+        setStatusMessage('Đã kết nối lại bộ giả lập');
+        showToast('Đã kết nối lại thiết bị giả lập!', 'success');
       }
     } catch (err: any) {
       showToast(err.message || 'Lỗi kết nối lại', 'error');
@@ -87,260 +85,212 @@ export const SimulatorDrawer: React.FC<SimulatorDrawerProps> = ({ isOpen, onClos
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden">
-      {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
+        className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity"
         onClick={onClose}
       />
 
       <div className="absolute inset-y-0 right-0 max-w-full flex pl-10">
-        <div className="w-screen max-w-md bg-slate-900 border-l border-slate-800 shadow-2xl flex flex-col">
-          {/* Header */}
-          <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
+        <div className="w-screen max-w-md bg-white border-l border-slate-200 shadow-2xl flex flex-col">
+          <div className="p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50">
             <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400">
-                <Cpu className="w-6 h-6 animate-pulse" />
+              <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-600">
+                <Cpu className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="font-bold text-slate-100 flex items-center gap-2">
-                  Hardware Simulator Drawer
-                </h3>
-                <p className="text-xs text-slate-400">Điều khiển giả lập vi điều khiển ESP32</p>
+                <h3 className="font-bold text-slate-900">Bộ giả lập phần cứng</h3>
+                <p className="text-xs text-slate-500">Chọn kịch bản mô phỏng để kiểm thử</p>
               </div>
             </div>
             <button
               onClick={onClose}
-              className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
 
-          {/* Device Realtime Status Preview */}
-          <div className="p-4 bg-slate-950/40 border-b border-slate-800/80">
+          <div className="p-4 bg-slate-50/70 border-b border-slate-200">
             <div className="flex items-center justify-between text-xs mb-2">
-              <span className="text-slate-400 font-medium">Thiết bị theo dõi: {activeDeviceCode}</span>
+              <span className="text-slate-600 font-medium">Node: {activeDeviceCode}</span>
               <span
-                className={`inline-flex items-center gap-1 font-semibold px-2 py-0.5 rounded text-[10px] ${
+                className={`inline-flex items-center gap-1 font-semibold px-2 py-0.5 rounded-full text-[10px] border ${
                   dev01Status?.state === 'OFFLINE'
-                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                    : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                 }`}
               >
-                <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    dev01Status?.state === 'OFFLINE' ? 'bg-rose-400' : 'bg-emerald-400 animate-ping'
-                  }`}
-                />
-                {dev01Status?.state || 'ONLINE'}
+                {dev01Status?.state === 'OFFLINE' ? 'Ngoại tuyến' : 'Trực tuyến'}
               </span>
             </div>
 
             <div className="grid grid-cols-4 gap-2 text-center text-xs">
-              <div className="bg-slate-800/60 p-2 rounded-lg border border-slate-700/50">
-                <div className="text-[10px] text-slate-400">Nhiệt độ</div>
-                <div className="font-bold text-amber-300 mt-0.5">
-                  {dev01Data ? `${dev01Data.temperature}°C` : '23.5°C'}
+              <div className="bg-white p-2 rounded-lg border border-slate-200">
+                <div className="text-[10px] text-slate-500">Nhiệt độ</div>
+                <div className="font-bold text-slate-900 mt-0.5">
+                  {dev01Data ? `${dev01Data.temperature}°C` : '--'}
                 </div>
               </div>
-              <div className="bg-slate-800/60 p-2 rounded-lg border border-slate-700/50">
-                <div className="text-[10px] text-slate-400">Độ ẩm RH</div>
-                <div className="font-bold text-blue-300 mt-0.5">
-                  {dev01Data ? `${dev01Data.humidity_air}%` : '60.2%'}
+              <div className="bg-white p-2 rounded-lg border border-slate-200">
+                <div className="text-[10px] text-slate-500">Độ ẩm</div>
+                <div className="font-bold text-slate-900 mt-0.5">
+                  {dev01Data ? `${dev01Data.humidity_air}%` : '--'}
                 </div>
               </div>
-              <div className="bg-slate-800/60 p-2 rounded-lg border border-slate-700/50">
-                <div className="text-[10px] text-slate-400">Khí Gas</div>
-                <div className="font-bold text-purple-300 mt-0.5">
-                  {dev01Data ? `${dev01Data.gas_ppm}` : '405'} ppm
+              <div className="bg-white p-2 rounded-lg border border-slate-200">
+                <div className="text-[10px] text-slate-500">Khí Gas</div>
+                <div className="font-bold text-slate-900 mt-0.5">
+                  {dev01Data ? `${dev01Data.gas_ppm}` : '--'}
                 </div>
               </div>
-              <div className="bg-slate-800/60 p-2 rounded-lg border border-slate-700/50">
-                <div className="text-[10px] text-slate-400">Quạt gió</div>
+              <div className="bg-white p-2 rounded-lg border border-slate-200">
+                <div className="text-[10px] text-slate-500">Quạt</div>
                 <div
                   className={`font-bold mt-0.5 ${
-                    dev01Data?.fan_state === 'ON' ? 'text-emerald-400' : 'text-slate-400'
+                    dev01Data?.fan_state === 'ON' ? 'text-amber-600' : 'text-slate-500'
                   }`}
                 >
-                  {dev01Data?.fan_state || 'OFF'}
+                  {dev01Data?.fan_state === 'ON' ? 'Bật' : 'Tắt'}
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Scenarios List */}
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
-            <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
-              <Activity className="w-3.5 h-3.5 text-amber-400" />
-              Chọn kịch bản demo (Mục 5.2):
+            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+              <Activity className="w-3.5 h-3.5 text-amber-600" />
+              Kịch bản kiểm thử:
             </div>
 
-            {/* Scenario 1 */}
             <button
               disabled={isLoading}
-              onClick={() => handleSelectScenario('NORMAL', 'Kịch bản 1: Kho An toàn')}
+              onClick={() => handleSelectScenario('NORMAL', 'Kho an toàn')}
               className={`w-full text-left p-3.5 rounded-xl border transition-all ${
                 activeScenario === 'NORMAL'
-                  ? 'bg-emerald-950/40 border-emerald-500/60 text-emerald-200 ring-1 ring-emerald-500/40 shadow-lg shadow-emerald-950/30'
-                  : 'bg-slate-800/40 border-slate-700/60 text-slate-300 hover:bg-slate-800 hover:border-slate-600'
+                  ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
               }`}
             >
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-sm flex items-center gap-2">
-                  <span className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400">
-                    <CheckCircle2 className="w-4 h-4" />
-                  </span>
-                  1. Kho An Toàn (Normal Safe)
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  1. Kho an toàn
                 </span>
                 {activeScenario === 'NORMAL' && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/30 text-emerald-300">
-                    ĐANG CHẠY
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-600 text-white">
+                    Đang chạy
                   </span>
                 )}
               </div>
-              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                T: 22-24°C, RH: 58-62%, Gas: 400 ppm, EMC: 12.5%. Quạt tắt, mức rủi ro SAFE.
+              <p className="text-xs text-slate-500 mt-1">
+                Nhiệt độ và độ ẩm nằm trong ngưỡng an toàn.
               </p>
             </button>
 
-            {/* Scenario 2 */}
             <button
               disabled={isLoading}
-              onClick={() =>
-                handleSelectScenario('HUMIDITY_SPIKE', 'Kịch bản 2: Nồm ẩm đột ngột >72% RH')
-              }
+              onClick={() => handleSelectScenario('HUMIDITY_SPIKE', 'Nồm ẩm tăng cao')}
               className={`w-full text-left p-3.5 rounded-xl border transition-all ${
                 activeScenario === 'HUMIDITY_SPIKE'
-                  ? 'bg-blue-950/40 border-blue-500/60 text-blue-200 ring-1 ring-blue-500/40 shadow-lg shadow-blue-950/30'
-                  : 'bg-slate-800/40 border-slate-700/60 text-slate-300 hover:bg-slate-800 hover:border-slate-600'
+                  ? 'bg-sky-50 border-sky-300 text-sky-900'
+                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
               }`}
             >
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-sm flex items-center gap-2">
-                  <span className="p-1.5 rounded-lg bg-blue-500/20 text-blue-400">
-                    <CloudRain className="w-4 h-4" />
-                  </span>
-                  2. Nồm Ẩm Đột Ngột (RH &gt; 72%)
+                  <CloudRain className="w-4 h-4 text-sky-600" />
+                  2. Độ ẩm tăng cao (&gt; 72%)
                 </span>
                 {activeScenario === 'HUMIDITY_SPIKE' && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-500/30 text-blue-300">
-                    ĐANG CHẠY
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-600 text-white">
+                    Đang chạy
                   </span>
                 )}
               </div>
-              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                RH vọt lên &gt;74%, EMC &gt;14.8%. Rule Engine tự động phát lệnh bật quạt thông gió & nhận ACK sau 300ms.
+              <p className="text-xs text-slate-500 mt-1">
+                Mô phỏng độ ẩm tăng vượt ngưỡng để bật quạt thông gió.
               </p>
             </button>
 
-            {/* Scenario 3 */}
             <button
               disabled={isLoading}
-              onClick={() =>
-                handleSelectScenario('FERMENTATION_SPIKE', 'Kịch bản 3: Hạt lên men sinh nhiệt & khí')
-              }
+              onClick={() => handleSelectScenario('FERMENTATION_SPIKE', 'Hạt lên men sinh khí')}
               className={`w-full text-left p-3.5 rounded-xl border transition-all ${
                 activeScenario === 'FERMENTATION_SPIKE'
-                  ? 'bg-rose-950/40 border-rose-500/60 text-rose-200 ring-1 ring-rose-500/40 shadow-lg shadow-rose-950/30'
-                  : 'bg-slate-800/40 border-slate-700/60 text-slate-300 hover:bg-slate-800 hover:border-slate-600'
+                  ? 'bg-rose-50 border-rose-300 text-rose-900'
+                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
               }`}
             >
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-sm flex items-center gap-2">
-                  <span className="p-1.5 rounded-lg bg-rose-500/20 text-rose-400">
-                    <Flame className="w-4 h-4" />
-                  </span>
-                  3. Hạt Lên Men Sinh Khí (&gt;850 ppm)
+                  <Flame className="w-4 h-4 text-rose-600" />
+                  3. Hạt lên men sinh khí
                 </span>
                 {activeScenario === 'FERMENTATION_SPIKE' && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-rose-500/30 text-rose-300">
-                    ĐANG CHẠY
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-600 text-white">
+                    Đang chạy
                   </span>
                 )}
               </div>
-              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                T: 32°C, Gas: 880 ppm (vượt ngưỡng 700). Kích hoạt còi Buzzer, quạt MAX và gửi cảnh báo Telegram.
+              <p className="text-xs text-slate-500 mt-1">
+                Nhiệt độ và khí gas tăng cao, bật quạt và còi cảnh báo.
               </p>
             </button>
 
-            {/* Scenario 4 */}
             <button
               disabled={isLoading}
-              onClick={() =>
-                handleSelectScenario('DISCONNECT_LWT', 'Kịch bản 4: Đứt kết nối đột ngột (LWT)')
-              }
+              onClick={() => handleSelectScenario('DISCONNECT_LWT', 'Mất kết nối đột ngột')}
               className={`w-full text-left p-3.5 rounded-xl border transition-all ${
                 activeScenario === 'DISCONNECT_LWT'
-                  ? 'bg-amber-950/40 border-amber-500/60 text-amber-200 ring-1 ring-amber-500/40 shadow-lg shadow-amber-950/30'
-                  : 'bg-slate-800/40 border-slate-700/60 text-slate-300 hover:bg-slate-800 hover:border-slate-600'
+                  ? 'bg-amber-50 border-amber-300 text-amber-900'
+                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
               }`}
             >
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-sm flex items-center gap-2">
-                  <span className="p-1.5 rounded-lg bg-amber-500/20 text-amber-400">
-                    <WifiOff className="w-4 h-4" />
-                  </span>
-                  4. Đứt Mạng Đột Ngột (LWT Offline)
+                  <WifiOff className="w-4 h-4 text-amber-600" />
+                  4. Mất kết nối đột ngột
                 </span>
-                {activeScenario === 'DISCONNECT_LWT' && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/30 text-amber-300">
-                    ĐANG CHẠY
-                  </span>
-                )}
               </div>
-              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                Hủy socket ngột ngạt không gửi DISCONNECT. Broker phát LWT chuyển thiết bị sang OFFLINE màu đỏ tức thì.
+              <p className="text-xs text-slate-500 mt-1">
+                Ngắt kết nối mô phỏng thiết bị bị mất điện / mất mạng.
               </p>
             </button>
 
-            {/* Scenario 5 */}
             <button
               disabled={isLoading}
-              onClick={() =>
-                handleSelectScenario(
-                  'REVOKED_DEVICE_ATTACK',
-                  'Kịch bản 5: Tấn công bằng thiết bị bị khóa'
-                )
-              }
+              onClick={() => handleSelectScenario('REVOKED_DEVICE_ATTACK', 'Thiết bị bị đình chỉ')}
               className={`w-full text-left p-3.5 rounded-xl border transition-all ${
                 activeScenario === 'REVOKED_DEVICE_ATTACK'
-                  ? 'bg-purple-950/40 border-purple-500/60 text-purple-200 ring-1 ring-purple-500/40 shadow-lg shadow-purple-950/30'
-                  : 'bg-slate-800/40 border-slate-700/60 text-slate-300 hover:bg-slate-800 hover:border-slate-600'
+                  ? 'bg-purple-50 border-purple-300 text-purple-900'
+                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
               }`}
             >
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-sm flex items-center gap-2">
-                  <span className="p-1.5 rounded-lg bg-purple-500/20 text-purple-400">
-                    <ShieldAlert className="w-4 h-4" />
-                  </span>
-                  5. Tấn Công Thiết Bị Đã Bị Khóa
+                  <ShieldAlert className="w-4 h-4 text-purple-600" />
+                  5. Giả lập thiết bị bị khóa gửi tin
                 </span>
-                {activeScenario === 'REVOKED_DEVICE_ATTACK' && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-purple-500/30 text-purple-300">
-                    ĐANG CHẠY
-                  </span>
-                )}
               </div>
-              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                Gửi telemetry từ thiết bị bị khóa (SUSPENDED). Backend chặn đứng và ghi nhật ký kiểm toán vào Audit Log.
+              <p className="text-xs text-slate-500 mt-1">
+                Kiểm tra cơ chế chặn và ghi nhật ký bảo mật.
               </p>
             </button>
           </div>
 
-          {/* Footer Controls */}
-          <div className="p-4 border-t border-slate-800 bg-slate-950/60 space-y-3">
-            <div className="text-[11px] text-slate-400 bg-slate-900 p-2.5 rounded-lg border border-slate-800 flex items-center gap-2">
-              <Zap className="w-4 h-4 text-amber-400 shrink-0" />
+          <div className="p-4 border-t border-slate-200 bg-slate-50 space-y-3">
+            <div className="text-xs text-slate-600 bg-white p-2.5 rounded-lg border border-slate-200 flex items-center gap-2">
+              <Zap className="w-4 h-4 text-amber-500 shrink-0" />
               <span>{statusMessage}</span>
             </div>
 
             <button
               disabled={isLoading}
               onClick={handleReconnect}
-              className="w-full py-2.5 px-4 rounded-xl font-medium text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center justify-center gap-2 transition-colors"
+              className="w-full py-2.5 px-4 rounded-xl font-semibold text-xs bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 flex items-center justify-center gap-2 transition-colors"
             >
-              <RotateCcw className="w-4 h-4 text-emerald-400" />
-              Tái kết nối MQTT (Sau khi test Kịch bản 4)
+              <RotateCcw className="w-4 h-4 text-emerald-600" />
+              Kết nối lại bộ giả lập
             </button>
           </div>
         </div>

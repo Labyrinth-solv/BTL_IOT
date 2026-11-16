@@ -74,6 +74,118 @@ String runtimeDeviceId   = DEVICE_ID;
 String runtimeMacAddress = "";
 String runtimeChipId     = "";
 
+// Ngoại vi tùy chọn thêm từ Web (tối đa 8 thiết bị, lưu trong NVS Flash)
+#define MAX_CUSTOM_PERIPHERALS 8
+struct CustomPeripheral {
+  String id;
+  String name;
+  String type;       // "RELAY_OUTPUT", "DIGITAL_INPUT", "ANALOG_INPUT"
+  uint8_t gpio;
+  bool activeHigh;
+  bool pullUp;
+  bool outputState;
+  int rawValue;
+  int displayValue;  // 0/1 cho RELAY_OUTPUT/DIGITAL_INPUT, 0..100% cho ANALOG_INPUT
+};
+CustomPeripheral customPeripherals[MAX_CUSTOM_PERIPHERALS];
+int customPeripheralCount = 0;
+
+bool isSafeCustomGpio(uint8_t gpio, const String& type) {
+  const uint8_t allowed[] = {4, 5, 13, 14, 16, 17, 18, 19, 23, 25, 26, 27, 32, 33, 34, 35, 36, 39};
+  bool found = false;
+  for (size_t i = 0; i < sizeof(allowed); i++) {
+    if (allowed[i] == gpio) {
+      found = true;
+      break;
+    }
+  }
+  if (!found) return false;
+  if (type == "RELAY_OUTPUT" && gpio >= 34) return false; // GPIO 34-39 la chan Input-only
+  return true;
+}
+
+void writeCustomRelayPin(const CustomPeripheral& cp) {
+  bool level = cp.activeHigh ? cp.outputState : !cp.outputState;
+  digitalWrite(cp.gpio, level ? HIGH : LOW);
+}
+
+void applyCustomPeripheralsHardware() {
+  for (int i = 0; i < customPeripheralCount; i++) {
+    CustomPeripheral& cp = customPeripherals[i];
+    if (!isSafeCustomGpio(cp.gpio, cp.type)) continue;
+    if (cp.type == "RELAY_OUTPUT") {
+      pinMode(cp.gpio, OUTPUT);
+      writeCustomRelayPin(cp);
+      cp.rawValue = cp.outputState ? 1 : 0;
+      cp.displayValue = cp.outputState ? 1 : 0;
+    } else if (cp.type == "DIGITAL_INPUT") {
+      pinMode(cp.gpio, cp.pullUp ? INPUT_PULLUP : INPUT);
+    } else if (cp.type == "ANALOG_INPUT") {
+      pinMode(cp.gpio, INPUT);
+    }
+  }
+}
+
+void parseCustomPeripheralsArray(JsonArray arr, bool preserveOutputStates) {
+  bool prevStates[MAX_CUSTOM_PERIPHERALS];
+  String prevIds[MAX_CUSTOM_PERIPHERALS];
+  int prevCount = customPeripheralCount;
+  for (int i = 0; i < prevCount; i++) {
+    prevIds[i] = customPeripherals[i].id;
+    prevStates[i] = customPeripherals[i].outputState;
+  }
+
+  int nextCount = 0;
+  for (JsonObject obj : arr) {
+    if (nextCount >= MAX_CUSTOM_PERIPHERALS) break;
+    String id = obj["id"] | "";
+    String name = obj["name"] | "";
+    String type = obj["type"] | "";
+    int gpioInt = obj["gpio"] | -1;
+    if (id.length() == 0 || gpioInt < 0 || !isSafeCustomGpio((uint8_t)gpioInt, type)) continue;
+
+    CustomPeripheral cp;
+    cp.id = id;
+    cp.name = name;
+    cp.type = type;
+    cp.gpio = (uint8_t)gpioInt;
+    cp.activeHigh = obj["active_high"].isNull() ? true : obj["active_high"].as<bool>();
+    cp.pullUp = obj["pull_up"].isNull() ? true : obj["pull_up"].as<bool>();
+    cp.outputState = false;
+    cp.rawValue = 0;
+    cp.displayValue = 0;
+
+    if (preserveOutputStates) {
+      for (int j = 0; j < prevCount; j++) {
+        if (prevIds[j] == cp.id) {
+          cp.outputState = prevStates[j];
+          break;
+        }
+      }
+    }
+    customPeripherals[nextCount++] = cp;
+  }
+  customPeripheralCount = nextCount;
+  applyCustomPeripheralsHardware();
+}
+
+String serializeCustomPeripheralsConfig() {
+  JsonDocument doc;
+  JsonArray arr = doc.to<JsonArray>();
+  for (int i = 0; i < customPeripheralCount; i++) {
+    JsonObject o = arr.add<JsonObject>();
+    o["id"] = customPeripherals[i].id;
+    o["name"] = customPeripherals[i].name;
+    o["type"] = customPeripherals[i].type;
+    o["gpio"] = customPeripherals[i].gpio;
+    o["active_high"] = customPeripherals[i].activeHigh;
+    o["pull_up"] = customPeripherals[i].pullUp;
+  }
+  String out;
+  serializeJson(arr, out);
+  return out;
+}
+
 // Topic MQTT động theo runtimeDeviceId
 String topicTelemetry = String("grain/devices/") + DEVICE_ID + "/telemetry";
 String topicStatus    = String("grain/devices/") + DEVICE_ID + "/status";
@@ -129,11 +241,19 @@ void loadConfigFromNVS() {
   cfgGasCrit  = preferences.getFloat("g_crit", THRESHOLD_GAS_CRIT);
   cfgEmcWarn  = preferences.getFloat("e_warn", THRESHOLD_EMC_WARN);
   cfgEmcCrit  = preferences.getFloat("e_crit", THRESHOLD_EMC_CRIT);
+  String customJson = preferences.getString("custom_per", "[]");
   preferences.end();
 
-  Serial.printf("💾 [NVS] Da nap cau hinh: interval=%lums | AHT=%d MQ=%d DOOR=%d FAN=%d(mode=%s) BUZ=%d(auto=%d)\n",
+  if (customJson.length() > 2) {
+    JsonDocument cDoc;
+    if (!deserializeJson(cDoc, customJson) && cDoc.is<JsonArray>()) {
+      parseCustomPeripheralsArray(cDoc.as<JsonArray>(), false);
+    }
+  }
+
+  Serial.printf("💾 [NVS] Da nap cau hinh: interval=%lums | AHT=%d MQ=%d DOOR=%d FAN=%d(mode=%s) BUZ=%d(auto=%d) | Custom=%d\n",
                 samplingIntervalMs, cfgAht20Enabled, cfgMq135Enabled, cfgDoorEnabled,
-                cfgFanEnabled, controlMode.c_str(), cfgBuzzerEnabled, cfgBuzzerAuto);
+                cfgFanEnabled, controlMode.c_str(), cfgBuzzerEnabled, cfgBuzzerAuto, customPeripheralCount);
 }
 
 void saveConfigToNVS() {
@@ -155,6 +275,7 @@ void saveConfigToNVS() {
   preferences.putFloat("g_crit", cfgGasCrit);
   preferences.putFloat("e_warn", cfgEmcWarn);
   preferences.putFloat("e_crit", cfgEmcCrit);
+  preferences.putString("custom_per", serializeCustomPeripheralsConfig());
   preferences.end();
 }
 
@@ -192,9 +313,94 @@ void setBuzzerRelay(bool enable) {
 // =============================================================================
 // ĐỌC CẢM BIẾN & KIỂM TRA SỨC KHỎE PHẦN CỨNG (AHT20, MQ-135, CỬA)
 // =============================================================================
-bool isI2CDevicePresent(uint8_t addr) {
+String lastAhtDiagnosticMsg = "";
+
+uint8_t probeI2CAddress(uint8_t addr) {
   Wire.beginTransmission(addr);
-  return (Wire.endTransmission() == 0);
+  return Wire.endTransmission();
+}
+
+String scanI2CBusSummary() {
+  String found = "";
+  int count = 0;
+  for (uint8_t addr = 0x01; addr < 0x7F; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      if (count > 0) found += ", ";
+      char hexBuf[6];
+      snprintf(hexBuf, sizeof(hexBuf), "0x%02X", addr);
+      found += String(hexBuf);
+      count++;
+      if (count >= 6) {
+        found += "...";
+        break;
+      }
+    }
+  }
+  return found;
+}
+
+String diagnoseAht20I2CBus(uint8_t probeErr) {
+  // Tam dung I2C de kiem tra muc logic tinh tren chan vat ly SDA (21) & SCL (22)
+  Wire.end();
+
+  pinMode(PIN_I2C_SDA, INPUT);
+  pinMode(PIN_I2C_SCL, INPUT);
+  delayMicroseconds(50);
+  int sdaNoPull = digitalRead(PIN_I2C_SDA);
+  int sclNoPull = digitalRead(PIN_I2C_SCL);
+
+  pinMode(PIN_I2C_SDA, INPUT_PULLUP);
+  pinMode(PIN_I2C_SCL, INPUT_PULLUP);
+  delayMicroseconds(50);
+  int sdaPull = digitalRead(PIN_I2C_SDA);
+  int sclPull = digitalRead(PIN_I2C_SCL);
+
+  // Khoi phuc lai I2C o 100kHz va timeout 50ms
+  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+  Wire.setClock(100000);
+  Wire.setTimeOut(50);
+
+  // 1. Duong day bi keo cung xuong GND (ke ca khi bat PULLUP noi bo)
+  if (sdaPull == LOW || sclPull == LOW) {
+    char msg[180];
+    snprintf(msg, sizeof(msg),
+             "Ket bus I2C muc LOW (SDA=%d, SCL=%d, err=%u) - Kiem tra cham GND, mat nguon VIN hoac cam nguoc day",
+             sdaPull, sclPull, probeErr);
+    return String(msg);
+  }
+
+  // 2. Thả nổi (khong co tro pull-up ngoai / ho mach / long day SDA hoac SCL)
+  if (sdaNoPull == LOW || sclNoPull == LOW) {
+    char msg[180];
+    snprintf(msg, sizeof(msg),
+             "Ho day / thieu pull-up I2C (noPU SDA=%d,SCL=%d, err=%u) - Kiem tra moi han & day SDA21/SCL22",
+             sdaNoPull, sclNoPull, probeErr);
+    return String(msg);
+  }
+
+  // 3. Ca SDA va SCL deu HIGH -> Quet toan bo dia chi I2C 0x01..0x7E
+  String otherDevices = scanI2CBusSummary();
+  if (otherDevices.length() > 0) {
+    char msg[180];
+    snprintf(msg, sizeof(msg),
+             "Khong thay 0x38 (err=%u), quet thay I2C tai: %s - Kiem tra dung loai cam bien/dia chi",
+             probeErr, otherDevices.c_str());
+    return String(msg);
+  }
+
+  if (probeErr == 2) {
+    return "NACK tai 0x38 (SDA21=1, SCL22=1) - Co the nguoc SDA/SCL, mat nguon AHT20 hoac long day";
+  }
+  if (probeErr == 5) {
+    return "I2C Timeout tai 0x38 (err=5) - Kiem tra nguoc day SDA/SCL hoac nhieu bus";
+  }
+
+  char msg[160];
+  snprintf(msg, sizeof(msg),
+           "Khong thay AHT20 tai 0x38 (err=%u, SDA21=%d, SCL22=%d) - Kiem tra day & nguon 3.3V",
+           probeErr, sdaPull, sclPull);
+  return String(msg);
 }
 
 void readSensors() {
@@ -204,27 +410,40 @@ void readSensors() {
     aht20Connected = false;
     aht20Status = "DISABLED";
     aht20Message = "Da vo hieu hoa theo doi AHT20 tu Web";
+    lastAhtDiagnosticMsg = aht20Message;
     currentTemperature = 0.0f;
     currentHumidity = 0.0f;
   } else {
-    bool ahtPresent = isI2CDevicePresent(AHT20_I2C_ADDR);
-    if (!ahtPresent) {
+    uint8_t probeErr = probeI2CAddress(AHT20_I2C_ADDR);
+    if (probeErr != 0) {
       if (hasRealAHT) {
         Serial.println("❌ [Hardware] Mat ket noi cam bien AHT20 tren bus I2C (0x38)!");
       }
       hasRealAHT = false;
       aht20Connected = false;
       aht20Status = ENABLE_SENSOR_SIMULATION_FALLBACK ? "SIMULATED" : "DISCONNECTED";
-      aht20Message = "Khong tim thay AHT20 tai I2C 0x38 (kiem tra SDA=21, SCL=22, 3.3V)";
+      aht20Message = diagnoseAht20I2CBus(probeErr);
+      if (aht20Message != lastAhtDiagnosticMsg) {
+        Serial.printf("🔎 [AHT20 Diag] %s\n", aht20Message.c_str());
+        lastAhtDiagnosticMsg = aht20Message;
+      }
     } else {
       if (!hasRealAHT) {
         if (aht.begin(&Wire, 0, AHT20_I2C_ADDR)) {
           hasRealAHT = true;
-          Serial.println("🔄 [Hardware] Da nhan dien va ket noi lai cam bien AHT20 (I2C 0x38)!");
+          Serial.println("🔄 [Hardware] Da nhan dien va ket noi cam bien AHT20 (I2C 0x38)!");
         } else {
           aht20Connected = false;
           aht20Status = "READ_ERROR";
-          aht20Message = "Thay dia chi I2C 0x38 nhung khoi tao AHT20 that bai";
+          uint8_t st = aht.getStatus();
+          char errBuf[140];
+          snprintf(errBuf, sizeof(errBuf),
+                   "Thay dia chi 0x38 nhung khoi tao AHT20 that bai (status=0x%02X)", st);
+          aht20Message = String(errBuf);
+          if (aht20Message != lastAhtDiagnosticMsg) {
+            Serial.printf("🔎 [AHT20 Diag] %s\n", aht20Message.c_str());
+            lastAhtDiagnosticMsg = aht20Message;
+          }
         }
       }
 
@@ -240,11 +459,21 @@ void readSensors() {
           aht20Connected = true;
           aht20Status = "OK";
           aht20Message = "Ket noi I2C 0x38 on dinh";
+          lastAhtDiagnosticMsg = aht20Message;
         } else {
           aht20Connected = false;
           hasRealAHT = false;
           aht20Status = "READ_ERROR";
-          aht20Message = "Loi doc du lieu tu AHT20 (NaN / ngoai dai do)";
+          uint8_t st = aht.getStatus();
+          char errBuf[150];
+          snprintf(errBuf, sizeof(errBuf),
+                   "Loi doc du lieu AHT20 (ok=%d, st=0x%02X, T=%.1f, H=%.1f)",
+                   readOk ? 1 : 0, st, isnan(t) ? -999.0f : t, isnan(h) ? -999.0f : h);
+          aht20Message = String(errBuf);
+          if (aht20Message != lastAhtDiagnosticMsg) {
+            Serial.printf("🔎 [AHT20 Diag] %s\n", aht20Message.c_str());
+            lastAhtDiagnosticMsg = aht20Message;
+          }
         }
       }
     }
@@ -343,6 +572,29 @@ void readSensors() {
       setFanRelay(true);
     } else {
       setFanRelay(false);
+    }
+  }
+
+  // 6. Đọc / cập nhật các ngoại vi tùy chọn (Custom Peripherals)
+  for (int i = 0; i < customPeripheralCount; i++) {
+    CustomPeripheral& cp = customPeripherals[i];
+    if (!isSafeCustomGpio(cp.gpio, cp.type)) continue;
+    if (cp.type == "RELAY_OUTPUT") {
+      cp.rawValue = cp.outputState ? 1 : 0;
+      cp.displayValue = cp.outputState ? 1 : 0;
+    } else if (cp.type == "DIGITAL_INPUT") {
+      int logic = digitalRead(cp.gpio);
+      cp.rawValue = logic;
+      cp.displayValue = (cp.activeHigh ? (logic == HIGH) : (logic == LOW)) ? 1 : 0;
+    } else if (cp.type == "ANALOG_INPUT") {
+      long sum = 0;
+      for (int s = 0; s < 4; s++) {
+        sum += analogRead(cp.gpio);
+        delayMicroseconds(150);
+      }
+      int raw = (int)(sum / 4);
+      cp.rawValue = raw;
+      cp.displayValue = constrain((int)map(raw, 0, 4095, 0, 100), 0, 100);
     }
   }
 }
@@ -453,9 +705,30 @@ void sendTelemetry() {
 
   health["fault_count"] = faultCount;
 
+  // Trạng thái các ngoại vi tùy chọn (nếu có)
+  if (customPeripheralCount > 0) {
+    JsonArray cpArr = doc["custom_peripherals"].to<JsonArray>();
+    for (int i = 0; i < customPeripheralCount; i++) {
+      CustomPeripheral& cp = customPeripherals[i];
+      JsonObject c = cpArr.add<JsonObject>();
+      c["id"]    = cp.id;
+      c["type"]  = cp.type;
+      c["gpio"]  = cp.gpio;
+      c["value"] = cp.displayValue;
+      if (cp.type == "RELAY_OUTPUT") {
+        c["state"] = cp.outputState ? "ON" : "OFF";
+      } else if (cp.type == "DIGITAL_INPUT") {
+        c["state"] = cp.displayValue ? "ACTIVE" : "INACTIVE";
+        c["raw_logic"] = cp.rawValue;
+      } else {
+        c["raw_adc"] = cp.rawValue;
+      }
+    }
+  }
+
   doc["rssi"] = WiFi.RSSI();
 
-  char buffer[1280];
+  char buffer[2048];
   serializeJson(doc, buffer);
   mqttClient.publish(topicTelemetry.c_str(), buffer, false);
 
@@ -473,7 +746,7 @@ void sendTelemetry() {
 // XỬ LÝ LỆNH ĐIỀU KHIỂN TỪ BACKEND (/cmd) VÀ PHẢN HỒI ACK (/ack)
 // =============================================================================
 void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
-  char jsonBuffer[1024];
+  char jsonBuffer[2048];
   if (length >= sizeof(jsonBuffer)) length = sizeof(jsonBuffer) - 1;
   memcpy(jsonBuffer, payload, length);
   jsonBuffer[length] = '\0';
@@ -536,6 +809,29 @@ void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
         ackMessage = "Relay K2 GPIO " + String(PIN_RELAY_BUZZER) + " deactivated (Coi bao dong TAT)";
       }
     }
+    // 3. Điều khiển Ngoại vi tùy chọn (Relay ngõ ra thêm từ Web)
+    else if (strcmp(target, "CUSTOM_PERIPHERAL") == 0) {
+      const char* periphId = payloadObj["peripheral_id"];
+      bool foundCp = false;
+      if (periphId) {
+        for (int i = 0; i < customPeripheralCount; i++) {
+          if (customPeripherals[i].id == String(periphId) && customPeripherals[i].type == "RELAY_OUTPUT") {
+            bool turnOn = action && strcmp(action, "TURN_ON") == 0;
+            customPeripherals[i].outputState = turnOn;
+            writeCustomRelayPin(customPeripherals[i]);
+            customPeripherals[i].rawValue = turnOn ? 1 : 0;
+            customPeripherals[i].displayValue = turnOn ? 1 : 0;
+            foundCp = true;
+            ackMessage = "Ngoai vi " + customPeripherals[i].name + " (GPIO " + String(customPeripherals[i].gpio) + ") " + (turnOn ? "BAT" : "TAT");
+            break;
+          }
+        }
+      }
+      if (!foundCp) {
+        ackStatus = "FAILED";
+        ackMessage = "Khong tim thay ngoai vi tuy chon tren ESP32";
+      }
+    }
   } else if (cmdType && strcmp(cmdType, "UPDATE_CONFIG") == 0) {
     if (!payloadObj["sampling_interval_ms"].isNull()) {
       unsigned long interval = payloadObj["sampling_interval_ms"].as<unsigned long>();
@@ -568,6 +864,10 @@ void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
       }
     }
 
+    if (payloadObj["custom_peripherals"].is<JsonArray>()) {
+      parseCustomPeripheralsArray(payloadObj["custom_peripherals"].as<JsonArray>(), true);
+    }
+
     saveConfigToNVS();
     readSensors();
     sendTelemetry();
@@ -588,10 +888,18 @@ void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
   currentActs["buzzer_state"] = buzzerState ? "ON" : "OFF";
   currentActs["door_state"]   = isDoorOpen ? "OPEN" : "CLOSED";
   currentActs["control_mode"] = controlMode;
+  if (customPeripheralCount > 0) {
+    JsonObject cpStates = currentActs["custom_peripherals"].to<JsonObject>();
+    for (int i = 0; i < customPeripheralCount; i++) {
+      if (customPeripherals[i].type == "RELAY_OUTPUT") {
+        cpStates[customPeripherals[i].id] = customPeripherals[i].outputState ? "ON" : "OFF";
+      }
+    }
+  }
 
   ackDoc["message"] = ackMessage;
 
-  char ackBuffer[512];
+  char ackBuffer[768];
   serializeJson(ackDoc, ackBuffer);
   mqttClient.publish(topicAck.c_str(), ackBuffer, false);
 
@@ -681,28 +989,41 @@ void setup() {
   setFanRelay(false);
   setBuzzerRelay(false);
 
-  // 2. Khởi tạo Bus I2C (SDA=21, SCL=22)
+  // 2. Khởi tạo Bus I2C (SDA=21, SCL=22, 100kHz, timeout 50ms)
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+  Wire.setClock(100000);
+  Wire.setTimeOut(50);
 
   // 3. Khởi tạo Cảm biến AHT20 (Địa chỉ mặc định 0x38, nguồn 3.3V)
-  if (isI2CDevicePresent(AHT20_I2C_ADDR) && aht.begin(&Wire, 0, AHT20_I2C_ADDR)) {
+  uint8_t initProbeErr = probeI2CAddress(AHT20_I2C_ADDR);
+  if (initProbeErr == 0 && aht.begin(&Wire, 0, AHT20_I2C_ADDR)) {
     hasRealAHT = true;
     aht20Connected = true;
     aht20Status = "OK";
     aht20Message = "Ket noi I2C 0x38 on dinh";
+    lastAhtDiagnosticMsg = aht20Message;
     Serial.println("✅ [Hardware] Cam bien nhiet am AHT20 san sang (I2C 0x38)!");
   } else {
     hasRealAHT = false;
     aht20Connected = false;
-    aht20Status = ENABLE_SENSOR_SIMULATION_FALLBACK ? "SIMULATED" : "DISCONNECTED";
-    aht20Message = "Khong tim thay AHT20 tai I2C 0x38 (kiem tra SDA=21, SCL=22, 3.3V)";
-    Serial.println("⚠️ [Hardware] Khong tim thay AHT20 tai I2C 0x38! Kiem tra day SDA(21), SCL(22), 3.3V.");
+    if (initProbeErr == 0) {
+      aht20Status = "READ_ERROR";
+      char errBuf[140];
+      snprintf(errBuf, sizeof(errBuf),
+               "Thay dia chi 0x38 nhung khoi tao AHT20 that bai (status=0x%02X)", aht.getStatus());
+      aht20Message = String(errBuf);
+    } else {
+      aht20Status = ENABLE_SENSOR_SIMULATION_FALLBACK ? "SIMULATED" : "DISCONNECTED";
+      aht20Message = diagnoseAht20I2CBus(initProbeErr);
+    }
+    lastAhtDiagnosticMsg = aht20Message;
+    Serial.printf("⚠️ [Hardware/AHT20] %s\n", aht20Message.c_str());
   }
 
-  // 4. Cấu hình MQTT Client (tăng buffer 1280 byte để chứa đủ sensor_health)
+  // 4. Cấu hình MQTT Client (tăng buffer 2048 byte để chứa đủ sensor_health & custom_peripherals)
   mqttClient.setServer(MQTT_SERVER_IP, MQTT_SERVER_PORT);
   mqttClient.setCallback(handleIncomingCommand);
-  mqttClient.setBufferSize(1280);
+  mqttClient.setBufferSize(2048);
 
   // 5. Kết nối Wi-Fi & MQTT
   connectWiFi();

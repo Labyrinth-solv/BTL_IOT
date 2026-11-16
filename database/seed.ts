@@ -73,10 +73,61 @@ async function main() {
     },
   });
 
-  console.log(`✅ Đã tạo 3 người dùng:
-   - Admin: ${adminUser.email} (Mật khẩu: admin123)
-   - Operator: ${operatorUser.email} (Mật khẩu: operator123)
-   - Viewer: ${viewerUser.email} (Mật khẩu: viewer123)`);
+  await prisma.user.upsert({
+    where: { email: 'admin' },
+    update: {
+      password_hash: adminPasswordHash,
+      full_name: 'Chủ kho (Admin)',
+      role: Role.ADMIN,
+      status: UserStatus.ACTIVE,
+    },
+    create: {
+      email: 'admin',
+      password_hash: adminPasswordHash,
+      full_name: 'Chủ kho (Admin)',
+      role: Role.ADMIN,
+      status: UserStatus.ACTIVE,
+    },
+  });
+
+  await prisma.user.upsert({
+    where: { email: 'operator' },
+    update: {
+      password_hash: operatorPasswordHash,
+      full_name: 'Nhân viên Vận hành',
+      role: Role.OPERATOR,
+      status: UserStatus.ACTIVE,
+    },
+    create: {
+      email: 'operator',
+      password_hash: operatorPasswordHash,
+      full_name: 'Nhân viên Vận hành',
+      role: Role.OPERATOR,
+      status: UserStatus.ACTIVE,
+    },
+  });
+
+  await prisma.user.upsert({
+    where: { email: 'viewer' },
+    update: {
+      password_hash: viewerPasswordHash,
+      full_name: 'Giám sát / QC',
+      role: Role.VIEWER,
+      status: UserStatus.ACTIVE,
+    },
+    create: {
+      email: 'viewer',
+      password_hash: viewerPasswordHash,
+      full_name: 'Giám sát / QC',
+      role: Role.VIEWER,
+      status: UserStatus.ACTIVE,
+    },
+  });
+
+  console.log(`✅ Đã tạo các tài khoản người dùng:
+   - Admin   : admin / admin123  (hoặc ${adminUser.email})
+   - Operator: operator / operator123 (hoặc ${operatorUser.email})
+   - Viewer  : viewer / viewer123 (hoặc ${viewerUser.email})`);
 
   // ---------------------------------------------------------------------------
   // 2. TẠO 2 KHU VỰC KHO THÓC TẺ THEO TIÊU CHUẨN TCVN 8370:2018

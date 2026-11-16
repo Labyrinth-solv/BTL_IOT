@@ -155,6 +155,14 @@ export class AlertController {
       const { all } = req.query;
       let count = 0;
 
+      if (all === 'true' && req.user!.role !== 'ADMIN') {
+        res.status(403).json({
+          success: false,
+          message: 'Chỉ Chủ kho (Admin) mới có quyền xóa toàn bộ cảnh báo (403 Forbidden)',
+        });
+        return;
+      }
+
       if (all === 'true') {
         const result = await prisma.alert.deleteMany({});
         count = result.count;

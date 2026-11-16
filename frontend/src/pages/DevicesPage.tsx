@@ -5,28 +5,23 @@ import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { Device, DiscoveredDevice, WarehouseZone } from '../types';
 import { LifecycleBadge } from '../components/LifecycleBadge';
+import { PERIPHERAL_CATALOG, normalizePeripherals } from '../utils/peripherals';
 import {
   Plus,
   RefreshCw,
   Search,
-  Check,
-  Copy,
-  AlertTriangle,
   Wrench,
   Ban,
   RotateCcw,
   Trash2,
   Cpu,
-  ArrowRight,
   ExternalLink,
   ShieldAlert,
   LayoutList,
   Table,
   Pencil,
   PlayCircle,
-  KeyRound,
   Radio,
-  Wifi,
   X,
 } from 'lucide-react';
 
@@ -43,7 +38,6 @@ export const DevicesPage: React.FC = () => {
   const [stateFilter, setStateFilter] = useState<string>('ALL');
   const [viewMode, setViewMode] = useState<'CARD' | 'TABLE'>('CARD');
 
-  // Modal Onboard
   const [isOnboardModalOpen, setIsOnboardModalOpen] = useState(false);
   const [newDeviceCode, setNewDeviceCode] = useState('');
   const [newDeviceName, setNewDeviceName] = useState('');
@@ -51,10 +45,7 @@ export const DevicesPage: React.FC = () => {
   const [newFwVersion, setNewFwVersion] = useState('1.1.1');
   const [newHwVersion, setNewHwVersion] = useState('ESP32-WROOM-32D-v2');
   const [isSubmittingOnboard, setIsSubmittingOnboard] = useState(false);
-  const [generatedToken, setGeneratedToken] = useState<string | null>(null);
-  const [hasCopiedToken, setHasCopiedToken] = useState(false);
 
-  // Modal Edit Device
   const [editModalDevice, setEditModalDevice] = useState<Device | null>(null);
   const [editName, setEditName] = useState('');
   const [editZoneId, setEditZoneId] = useState('');
@@ -62,13 +53,8 @@ export const DevicesPage: React.FC = () => {
   const [editHwVersion, setEditHwVersion] = useState('');
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
 
-  // Modal Rotate Token
-  const [rotatedTokenInfo, setRotatedTokenInfo] = useState<{ deviceCode: string; token: string } | null>(null);
-  const [hasCopiedRotatedToken, setHasCopiedRotatedToken] = useState(false);
-
-  // Modal Suspend
   const [suspendModalDevice, setSuspendModalDevice] = useState<Device | null>(null);
-  const [suspendReason, setSuspendReason] = useState('Nghi ngờ can thiệp phần cứng trái phép');
+  const [suspendReason, setSuspendReason] = useState('Tạm ngưng kiểm tra thiết bị');
   const [isSubmittingSuspend, setIsSubmittingSuspend] = useState(false);
 
   const fetchData = async () => {
@@ -100,6 +86,12 @@ export const DevicesPage: React.FC = () => {
     fetchData();
   }, []);
 
+  const closeOnboardModal = () => {
+    setIsOnboardModalOpen(false);
+    setNewDeviceCode('');
+    setNewDeviceName('');
+  };
+
   const handleOnboardSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newDeviceCode || !newDeviceName || !newZoneId) {
@@ -122,30 +114,14 @@ export const DevicesPage: React.FC = () => {
         removeDiscoveredDevice(codeNormalized);
         setApiDiscovered((prev) => prev.filter((n) => n.device_code !== codeNormalized));
         closeOnboardModal();
-        showToast(`Đã đăng ký thiết bị ${codeNormalized} thành công!`, 'success');
+        showToast(`Đã thêm thiết bị ${codeNormalized} thành công!`, 'success');
         fetchData();
       }
     } catch (err: any) {
-      showToast(err.message || 'Lỗi khi Onboard thiết bị', 'error');
+      showToast(err.message || 'Lỗi khi thêm thiết bị', 'error');
     } finally {
       setIsSubmittingOnboard(false);
     }
-  };
-
-  const handleCopyToken = () => {
-    if (generatedToken) {
-      navigator.clipboard.writeText(generatedToken);
-      setHasCopiedToken(true);
-      showToast('Đã sao chép secret_token vào clipboard!', 'success');
-      setTimeout(() => setHasCopiedToken(false), 3000);
-    }
-  };
-
-  const closeOnboardModal = () => {
-    setIsOnboardModalOpen(false);
-    setGeneratedToken(null);
-    setNewDeviceCode('');
-    setNewDeviceName('');
   };
 
   const handleToggleMaintenance = async (device: Device) => {
@@ -154,7 +130,7 @@ export const DevicesPage: React.FC = () => {
       const res = await api.toggleMaintenance(device.id, !isMaint);
       if (res.success) {
         showToast(
-          `Đã chuyển thiết bị ${device.device_code} sang trạng thái ${!isMaint ? 'Bảo trì (MAINTENANCE)' : 'Hoạt động (ACTIVE)'}`,
+          `Đã chuyển ${device.device_code} sang trạng thái ${!isMaint ? 'Bảo trì' : 'Hoạt động'}`,
           'success'
         );
         fetchData();
@@ -170,7 +146,7 @@ export const DevicesPage: React.FC = () => {
     try {
       const res = await api.suspendDevice(suspendModalDevice.id, suspendReason);
       if (res.success) {
-        showToast(`Đã đình chỉ (SUSPEND) thiết bị ${suspendModalDevice.device_code}`, 'warning');
+        showToast(`Đã đình chỉ thiết bị ${suspendModalDevice.device_code}`, 'warning');
         setSuspendModalDevice(null);
         fetchData();
       }
@@ -185,7 +161,7 @@ export const DevicesPage: React.FC = () => {
     try {
       const res = await api.unsuspendDevice(device.id);
       if (res.success) {
-        showToast(`Đã phục hồi kích hoạt thiết bị ${device.device_code}`, 'success');
+        showToast(`Đã kích hoạt lại thiết bị ${device.device_code}`, 'success');
         fetchData();
       }
     } catch (err: any) {
@@ -194,13 +170,13 @@ export const DevicesPage: React.FC = () => {
   };
 
   const handleDecommission = async (device: Device) => {
-    if (!window.confirm(`CẢNH BÁO: Bạn có chắc chắn muốn thu hồi (DECOMMISSION) vĩnh viễn thiết bị ${device.device_code}? Token và quyền truy cập sẽ bị huỷ vĩnh viễn!`)) {
+    if (!window.confirm(`Bạn có chắc muốn thu hồi thiết bị ${device.device_code}?`)) {
       return;
     }
     try {
       const res = await api.decommissionDevice(device.id);
       if (res.success) {
-        showToast(`Đã thu hồi vĩnh viễn thiết bị ${device.device_code}`, 'error');
+        showToast(`Đã thu hồi thiết bị ${device.device_code}`, 'error');
         fetchData();
       }
     } catch (err: any) {
@@ -212,7 +188,7 @@ export const DevicesPage: React.FC = () => {
     try {
       const res = await api.activateDevice(device.id);
       if (res.success) {
-        showToast(`Đã kích hoạt thiết bị ${device.device_code} sang trạng thái ACTIVE`, 'success');
+        showToast(`Đã kích hoạt thiết bị ${device.device_code}`, 'success');
         fetchData();
       }
     } catch (err: any) {
@@ -243,7 +219,7 @@ export const DevicesPage: React.FC = () => {
         hw_version: editHwVersion.trim(),
       });
       if (res.success) {
-        showToast(`Đã cập nhật thông tin ${editModalDevice.device_code}`, 'success');
+        showToast(`Đã cập nhật ${editModalDevice.device_code}`, 'success');
         setEditModalDevice(null);
         fetchData();
       }
@@ -254,30 +230,10 @@ export const DevicesPage: React.FC = () => {
     }
   };
 
-  const handleRotateToken = async (device: Device) => {
-    if (
-      !window.confirm(
-        `Cấp lại Secret Token mới cho ${device.device_code}? Token cũ (nếu dùng HTTP Auth) sẽ hết hiệu lực ngay lập tức.`
-      )
-    ) {
-      return;
-    }
-    try {
-      const res = await api.rotateDeviceToken(device.id);
-      if (res.success && res.data?.secret_token) {
-        setRotatedTokenInfo({ deviceCode: device.device_code, token: res.data.secret_token });
-        setHasCopiedRotatedToken(false);
-        showToast(`Đã cấp lại token mới cho ${device.device_code}`, 'success');
-      }
-    } catch (err: any) {
-      showToast(err.message || 'Lỗi cấp lại token', 'error');
-    }
-  };
-
   const handleDeletePermanent = async (device: Device) => {
     if (
       !window.confirm(
-        `XÓA HẲN THIẾT BỊ ${device.device_code} (${device.name})?\nToàn bộ lịch sử đo, cảnh báo và lệnh điều khiển của node này sẽ bị xóa khỏi CSDL!`
+        `Xóa hẳn thiết bị ${device.device_code} (${device.name}) cùng toàn bộ dữ liệu liên quan?`
       )
     ) {
       return;
@@ -285,7 +241,7 @@ export const DevicesPage: React.FC = () => {
     try {
       const res = await api.deleteDevice(device.id);
       if (res.success) {
-        showToast(`Đã xóa vĩnh viễn thiết bị ${device.device_code}`, 'success');
+        showToast(`Đã xóa thiết bị ${device.device_code}`, 'success');
         fetchData();
       }
     } catch (err: any) {
@@ -294,7 +250,6 @@ export const DevicesPage: React.FC = () => {
   };
 
   const handleQuickOnboardDiscovered = (node: DiscoveredDevice) => {
-    setGeneratedToken(null);
     setNewDeviceCode(node.device_code);
     setNewDeviceName(`Node Silo ${node.device_code}`);
     setNewFwVersion(node.fw_version || '1.1.1');
@@ -305,7 +260,6 @@ export const DevicesPage: React.FC = () => {
     setIsOnboardModalOpen(true);
   };
 
-  // Gộp danh sách ESP32 vừa phát hiện qua API & Socket, bỏ những node đã tồn tại trong DB
   const registeredCodes = new Set(devices.map((d) => d.device_code));
   const discoveredMap = new Map<string, DiscoveredDevice>();
   apiDiscovered.forEach((n) => {
@@ -318,13 +272,10 @@ export const DevicesPage: React.FC = () => {
     (a, b) => b.last_seen_at - a.last_seen_at
   );
 
-  // Filtered devices
   const filteredDevices = devices.filter((dev) => {
     const matchesSearch =
       dev.device_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
       dev.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (dev.ip_address && dev.ip_address.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (dev.mac_address && dev.mac_address.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (dev.zone?.name && dev.zone.name.toLowerCase().includes(searchTerm.toLowerCase()));
 
     const matchesState = stateFilter === 'ALL' || dev.lifecycle_state === stateFilter;
@@ -333,15 +284,14 @@ export const DevicesPage: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-100 flex items-center gap-2">
-            <Cpu className="w-7 h-7 text-amber-500" />
-            <span>Quản lý Thiết bị Cảm biến Silo</span>
+          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+            <Cpu className="w-6 h-6 text-emerald-600" />
+            <span>Quản lý Thiết bị &amp; Mạch</span>
           </h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Quản trị vòng đời phần cứng (Lifecycle State Machine: Registered &rarr; Active &rarr; Maintenance / Suspended &rarr; Decommissioned)
+          <p className="text-sm text-slate-500 mt-0.5">
+            Thêm mạch ESP32 mới, thay đổi thông tin và quản lý các thiết bị ngoại vi
           </p>
         </div>
 
@@ -349,7 +299,7 @@ export const DevicesPage: React.FC = () => {
           <button
             onClick={fetchData}
             disabled={isLoading}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition"
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold border border-slate-200 shadow-sm transition"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             <span>Làm mới</span>
@@ -358,29 +308,25 @@ export const DevicesPage: React.FC = () => {
           {isAdmin && (
             <button
               onClick={() => setIsOnboardModalOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition"
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-sm transition"
             >
-              <Plus className="w-4 h-4 stroke-[2.5]" />
-              <span>Onboard Thiết bị Mới</span>
+              <Plus className="w-4 h-4" />
+              <span>Thêm Thiết bị Mới</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* Auto-Discovered ESP32 Banner (Node đã kết nối MQTT nhưng chưa đăng ký vào DB) */}
+      {/* Auto-Discovered ESP32 Banner */}
       {discoveredList.length > 0 && (
-        <div className="bg-amber-500/10 border border-amber-500/40 rounded-2xl p-4 space-y-3 shadow-lg">
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-3 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-amber-300 font-bold text-sm">
-              <Radio className="w-4 h-4 text-amber-400 animate-pulse" />
-              <span>
-                Phát hiện {discoveredList.length} thiết bị ESP32 mới đang gửi MQTT nhưng chưa đăng ký
-              </span>
+            <div className="flex items-center gap-2 text-amber-900 font-bold text-sm">
+              <Radio className="w-4 h-4 text-amber-600 animate-pulse" />
+              <span>Phát hiện {discoveredList.length} thiết bị mới đang kết nối</span>
             </div>
-            <span className="text-[11px] text-amber-200/80">
-              {isAdmin
-                ? 'Bấm "Thêm ngay" để gán vào khu vực kho và bắt đầu theo dõi'
-                : 'Liên hệ Admin để duyệt và thêm node mới vào kho'}
+            <span className="text-xs text-amber-800">
+              {isAdmin ? 'Bấm "Thêm ngay" để đưa vào danh sách theo dõi' : 'Liên hệ Chủ kho để thêm thiết bị mới'}
             </span>
           </div>
 
@@ -388,32 +334,22 @@ export const DevicesPage: React.FC = () => {
             {discoveredList.map((node) => (
               <div
                 key={node.device_code}
-                className="bg-slate-950/70 border border-amber-500/30 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3"
+                className="bg-white border border-amber-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3"
               >
-                <div className="space-y-1 text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono font-bold text-amber-300 text-sm">
-                      {node.device_code}
-                    </span>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                      Đang phát {node.last_channel}
-                    </span>
-                  </div>
-                  <div className="text-[11px] text-slate-400 font-mono flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                    {node.ip_address && <span>IP: {node.ip_address}</span>}
-                    {node.mac_address && <span>MAC: {node.mac_address}</span>}
-                    {node.chip_id && <span>Chip: {node.chip_id}</span>}
-                    {node.fw_version && <span>FW: v{node.fw_version}</span>}
-                  </div>
+                <div className="text-xs">
+                  <div className="font-bold text-slate-900">{node.device_code}</div>
+                  {node.ip_address && (
+                    <div className="text-[11px] text-slate-500 mt-0.5">Địa chỉ mạng: {node.ip_address}</div>
+                  )}
                 </div>
 
                 {isAdmin && (
                   <button
                     onClick={() => handleQuickOnboardDiscovered(node)}
-                    className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition"
+                    className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-semibold text-xs flex items-center gap-1.5 transition"
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    <span>Thêm ngay (Onboard)</span>
+                    <span>Thêm ngay</span>
                   </button>
                 )}
               </div>
@@ -422,176 +358,147 @@ export const DevicesPage: React.FC = () => {
         </div>
       )}
 
-      {/* Filter and Search Bar */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+      {/* Search & Filter */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 shadow-sm">
         <div className="relative flex-1">
           <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="Tìm theo mã thiết bị, tên hoặc khu vực kho..."
+            placeholder="Tìm theo tên thiết bị hoặc khu vực kho..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-500 transition"
+            className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 transition"
           />
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-400 whitespace-nowrap">Trạng thái:</span>
-            <select
-              value={stateFilter}
-              onChange={(e) => setStateFilter(e.target.value)}
-              className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
-            >
-              <option value="ALL">Tất cả ({devices.length})</option>
-              <option value="ACTIVE">ACTIVE</option>
-              <option value="PROVISIONED">PROVISIONED</option>
-              <option value="MAINTENANCE">MAINTENANCE</option>
-              <option value="SUSPENDED">SUSPENDED</option>
-              <option value="DECOMMISSIONED">DECOMMISSIONED</option>
-              <option value="FAULT">FAULT</option>
-            </select>
-          </div>
+          <select
+            value={stateFilter}
+            onChange={(e) => setStateFilter(e.target.value)}
+            className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:border-emerald-500"
+          >
+            <option value="ALL">Tất cả ({devices.length})</option>
+            <option value="ACTIVE">Đang hoạt động</option>
+            <option value="PROVISIONED">Đã cấp phép</option>
+            <option value="MAINTENANCE">Bảo trì</option>
+            <option value="SUSPENDED">Đình chỉ</option>
+            <option value="DECOMMISSIONED">Đã thu hồi</option>
+          </select>
 
-          {/* Toggle View Mode: Thẻ Co Giãn vs Bảng */}
-          <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
             <button
               type="button"
               onClick={() => setViewMode('CARD')}
               className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${
                 viewMode === 'CARD'
-                  ? 'bg-amber-500 text-slate-950 shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-800'
               }`}
-              title="Chế độ Thẻ co giãn (Tự động xuống hàng, không bị tràn ngang)"
             >
               <LayoutList className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Dạng thẻ co giãn</span>
+              <span>Thẻ</span>
             </button>
             <button
               type="button"
               onClick={() => setViewMode('TABLE')}
               className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${
                 viewMode === 'TABLE'
-                  ? 'bg-amber-500 text-slate-950 shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-800'
               }`}
-              title="Chế độ Bảng truyền thống"
             >
               <Table className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Dạng bảng</span>
+              <span>Bảng</span>
             </button>
           </div>
         </div>
       </div>
 
-      {/* CHẾ ĐỘ 1: DẠNG THẺ CO GIÃN (CARD STREAM - KHÔNG TRÀN NGANG) */}
       {viewMode === 'CARD' ? (
         <div className="space-y-3">
           {filteredDevices.length === 0 ? (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-400">
+            <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-slate-400">
               Không tìm thấy thiết bị nào phù hợp.
             </div>
           ) : (
             filteredDevices.map((dev) => {
               const wsStatus = deviceStatus[dev.device_code];
-              const wsTelemetry = latestTelemetry[dev.device_code];
               const liveOnline = wsStatus ? wsStatus.state !== 'OFFLINE' : dev.is_online;
-              const liveIp = wsTelemetry?.ip_address ?? wsStatus?.ip_address ?? dev.ip_address;
-              const liveMac = wsTelemetry?.mac_address ?? wsStatus?.mac_address ?? dev.mac_address;
-              const liveRssi = wsTelemetry?.rssi ?? wsStatus?.rssi ?? dev.rssi;
-
               const isSuspended = dev.lifecycle_state === 'SUSPENDED';
               const isDecommissioned = dev.lifecycle_state === 'DECOMMISSIONED';
               const isMaintenance = dev.lifecycle_state === 'MAINTENANCE';
               const needsActivation =
                 dev.lifecycle_state === 'REGISTERED' || dev.lifecycle_state === 'PROVISIONED';
 
+              const periph = normalizePeripherals((dev.config_json as any)?.peripherals);
+              const attachedCount = PERIPHERAL_CATALOG.filter(
+                (p) => periph[p.enabledKey] !== false
+              ).length;
+              const customCount = Array.isArray((dev.config_json as any)?.custom_peripherals)
+                ? (dev.config_json as any).custom_peripherals.length
+                : 0;
+
               return (
                 <div
                   key={dev.id}
-                  className="bg-slate-900 border border-slate-800 hover:border-slate-700/80 rounded-2xl p-4 shadow-md transition space-y-3"
+                  className="bg-white border border-slate-200 hover:border-slate-300 rounded-2xl p-4 shadow-sm transition space-y-3"
                 >
-                  {/* Hàng 1: Mã thiết bị, Tên, Vòng đời, Online/Offline */}
                   <div className="flex flex-wrap items-center justify-between gap-2.5">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono font-bold text-amber-400 text-sm">
+                      <span className="font-bold text-slate-900 text-sm">{dev.name}</span>
+                      <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
                         {dev.device_code}
-                      </span>
-                      <span className="font-semibold text-slate-100 text-sm">
-                        {dev.name}
                       </span>
                       <LifecycleBadge state={dev.lifecycle_state} />
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {typeof liveRssi === 'number' && liveOnline && (
-                        <span className="text-[11px] font-mono text-slate-400 flex items-center gap-1">
-                          <Wifi className="w-3 h-3 text-emerald-400" />
-                          {liveRssi} dBm
-                        </span>
-                      )}
+                      <span className="text-xs text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full font-medium">
+                        {attachedCount + customCount} ngoại vi
+                      </span>
                       <span
-                        className={`w-2 h-2 rounded-full ${
-                          liveOnline ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'
-                        }`}
-                      />
-                      <span
-                        className={`text-xs font-semibold ${
-                          liveOnline ? 'text-emerald-400' : 'text-rose-400'
+                        className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full border ${
+                          liveOnline
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : 'bg-slate-100 text-slate-600 border-slate-200'
                         }`}
                       >
-                        {liveOnline ? 'ONLINE' : 'OFFLINE'}
+                        <span
+                          className={`w-2 h-2 rounded-full ${
+                            liveOnline ? 'bg-emerald-500' : 'bg-slate-400'
+                          }`}
+                        />
+                        {liveOnline ? 'Trực tuyến' : 'Ngoại tuyến'}
                       </span>
                     </div>
                   </div>
 
-                  {/* Hàng 2: Thông tin vị trí kho, phần cứng, định danh mạng, gói tin cuối */}
-                  <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs text-slate-400 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/60">
+                  <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-slate-500">
                     <div>
-                      <span className="text-slate-500">Khu vực: </span>
-                      <span className="text-slate-200 font-medium">
-                        {dev.zone?.name || 'Chưa gán'}
-                      </span>
+                      Khu vực: <strong className="text-slate-800">{dev.zone?.name || 'Chưa gán'}</strong>
                     </div>
                     <div>
-                      <span className="text-slate-500">Phần cứng: </span>
-                      <span className="font-mono text-slate-300">
-                        v{dev.fw_version} | {dev.hw_version}
-                      </span>
-                    </div>
-                    {(liveIp || liveMac) && (
-                      <div>
-                        <span className="text-slate-500">Định danh mạch: </span>
-                        <span className="font-mono text-sky-300">
-                          {liveIp ? `IP ${liveIp}` : ''}
-                          {liveIp && liveMac ? ' | ' : ''}
-                          {liveMac ? `MAC ${liveMac}` : ''}
-                        </span>
-                      </div>
-                    )}
-                    <div>
-                      <span className="text-slate-500">Gói tin gần nhất: </span>
-                      <span className="text-slate-300">
+                      Cập nhật gần nhất:{' '}
+                      <span className="text-slate-700">
                         {dev.last_seen_at
-                          ? new Date(dev.last_seen_at).toLocaleTimeString('vi-VN', {
+                          ? new Date(dev.last_seen_at).toLocaleString('vi-VN', {
                               hour: '2-digit',
                               minute: '2-digit',
-                              second: '2-digit',
+                              day: '2-digit',
+                              month: '2-digit',
                             })
                           : 'Chưa có dữ liệu'}
                       </span>
                     </div>
                   </div>
 
-                  {/* Hàng 3: Nút Thao tác (Tự động xuống hàng nếu màn hình hẹp) */}
-                  <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+                  <div className="pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
                     <button
                       onClick={() => navigate(`/devices/${dev.id}`)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition shadow-sm"
+                      className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs transition shadow-sm"
                     >
                       <ExternalLink className="w-3.5 h-3.5" />
-                      <span>Xem chi tiết vi khí hậu &amp; Điều khiển</span>
+                      <span>Chi tiết &amp; Quản lý Ngoại vi</span>
                     </button>
 
                     {!isViewer && (
@@ -599,7 +506,7 @@ export const DevicesPage: React.FC = () => {
                         {needsActivation && (
                           <button
                             onClick={() => handleActivate(dev)}
-                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 text-xs font-semibold transition"
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 text-xs font-semibold transition"
                           >
                             <PlayCircle className="w-3.5 h-3.5" />
                             <span>Kích hoạt</span>
@@ -608,7 +515,7 @@ export const DevicesPage: React.FC = () => {
 
                         <button
                           onClick={() => openEditModal(dev)}
-                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700 text-xs font-semibold transition"
+                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 text-xs font-semibold transition"
                         >
                           <Pencil className="w-3.5 h-3.5" />
                           <span>Sửa</span>
@@ -620,12 +527,12 @@ export const DevicesPage: React.FC = () => {
                               onClick={() => handleToggleMaintenance(dev)}
                               className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition ${
                                 isMaintenance
-                                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
-                                  : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
+                                  ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
                               }`}
                             >
                               <Wrench className="w-3.5 h-3.5" />
-                              <span>{isMaintenance ? 'Tắt bảo trì' : 'Bật bảo trì'}</span>
+                              <span>{isMaintenance ? 'Xong bảo trì' : 'Bảo trì'}</span>
                             </button>
 
                             {isAdmin && (
@@ -633,7 +540,7 @@ export const DevicesPage: React.FC = () => {
                                 {isSuspended ? (
                                   <button
                                     onClick={() => handleUnsuspend(dev)}
-                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 text-xs font-semibold transition"
+                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 text-xs font-semibold transition"
                                   >
                                     <RotateCcw className="w-3.5 h-3.5" />
                                     <span>Mở đình chỉ</span>
@@ -641,7 +548,7 @@ export const DevicesPage: React.FC = () => {
                                 ) : (
                                   <button
                                     onClick={() => setSuspendModalDevice(dev)}
-                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 text-xs font-semibold transition"
+                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 text-xs font-semibold transition"
                                   >
                                     <Ban className="w-3.5 h-3.5" />
                                     <span>Đình chỉ</span>
@@ -650,7 +557,7 @@ export const DevicesPage: React.FC = () => {
 
                                 <button
                                   onClick={() => handleDecommission(dev)}
-                                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-950/40 text-red-400 border border-red-900/60 hover:bg-red-900/80 hover:text-white text-xs font-semibold transition"
+                                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 text-xs font-semibold transition"
                                 >
                                   <Ban className="w-3.5 h-3.5" />
                                   <span>Thu hồi</span>
@@ -663,8 +570,7 @@ export const DevicesPage: React.FC = () => {
                         {isAdmin && (
                           <button
                             onClick={() => handleDeletePermanent(dev)}
-                            title="Xóa hẳn thiết bị khỏi CSDL"
-                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-950/60 text-rose-300 border border-rose-800/70 hover:bg-rose-800 hover:text-white text-xs font-semibold transition"
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-600 text-white hover:bg-rose-700 text-xs font-semibold transition"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                             <span>Xóa hẳn</span>
@@ -679,185 +585,58 @@ export const DevicesPage: React.FC = () => {
           )}
         </div>
       ) : (
-        /* CHẾ ĐỘ 2: DẠNG BẢNG TRUYỀN THỐNG */
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 uppercase font-semibold tracking-wider">
-                  <th className="py-3.5 px-4">Mã Thiết bị</th>
-                  <th className="py-3.5 px-4">Tên Silo</th>
-                  <th className="py-3.5 px-4">Khu vực Lưu trữ</th>
-                  <th className="py-3.5 px-4">Trạng thái Vòng đời</th>
-                  <th className="py-3.5 px-4">Kết nối MQTT</th>
-                  <th className="py-3.5 px-4">Firmware / Hardware</th>
-                  <th className="py-3.5 px-4">Gói tin gần nhất</th>
+                <tr className="border-b border-slate-200 bg-slate-50 text-slate-500 uppercase font-semibold tracking-wider">
+                  <th className="py-3.5 px-4">Tên thiết bị</th>
+                  <th className="py-3.5 px-4">Mã</th>
+                  <th className="py-3.5 px-4">Khu vực</th>
+                  <th className="py-3.5 px-4">Trạng thái</th>
+                  <th className="py-3.5 px-4">Kết nối</th>
                   <th className="py-3.5 px-4 text-right">Thao tác</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800 text-slate-200">
+              <tbody className="divide-y divide-slate-100 text-slate-700">
                 {filteredDevices.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-slate-400">
+                    <td colSpan={6} className="py-8 text-center text-slate-400">
                       Không tìm thấy thiết bị nào phù hợp.
                     </td>
                   </tr>
                 ) : (
                   filteredDevices.map((dev) => {
                     const wsStatus = deviceStatus[dev.device_code];
-                    const wsTelemetry = latestTelemetry[dev.device_code];
                     const liveOnline = wsStatus ? wsStatus.state !== 'OFFLINE' : dev.is_online;
-                    const liveIp = wsTelemetry?.ip_address ?? wsStatus?.ip_address ?? dev.ip_address;
-                    const liveMac = wsTelemetry?.mac_address ?? wsStatus?.mac_address ?? dev.mac_address;
-                    const isSuspended = dev.lifecycle_state === 'SUSPENDED';
-                    const isDecommissioned = dev.lifecycle_state === 'DECOMMISSIONED';
-                    const isMaintenance = dev.lifecycle_state === 'MAINTENANCE';
-                    const needsActivation =
-                      dev.lifecycle_state === 'REGISTERED' || dev.lifecycle_state === 'PROVISIONED';
-
                     return (
                       <tr
                         key={dev.id}
-                        className="hover:bg-slate-800/40 transition-colors group cursor-pointer"
+                        className="hover:bg-slate-50 transition-colors cursor-pointer"
                         onClick={() => navigate(`/devices/${dev.id}`)}
                       >
-                        <td className="py-3.5 px-4 font-mono font-bold text-amber-400">
-                          <div>{dev.device_code}</div>
-                          {(liveIp || liveMac) && (
-                            <div className="text-[10px] font-normal text-sky-300 mt-0.5">
-                              {liveIp || liveMac}
-                            </div>
-                          )}
-                        </td>
-                        <td className="py-3.5 px-4 font-medium text-slate-100">
-                          {dev.name}
-                        </td>
-                        <td className="py-3.5 px-4 text-slate-300">
-                          {dev.zone?.name || 'Chưa gán'}
-                        </td>
+                        <td className="py-3.5 px-4 font-semibold text-slate-900">{dev.name}</td>
+                        <td className="py-3.5 px-4 text-slate-600">{dev.device_code}</td>
+                        <td className="py-3.5 px-4">{dev.zone?.name || 'Chưa gán'}</td>
                         <td className="py-3.5 px-4">
                           <LifecycleBadge state={dev.lifecycle_state} />
                         </td>
                         <td className="py-3.5 px-4">
-                          <div className="flex items-center gap-1.5">
-                            <span
-                              className={`w-2 h-2 rounded-full ${
-                                liveOnline ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'
-                              }`}
-                            />
-                            <span
-                              className={`font-semibold ${
-                                liveOnline ? 'text-emerald-400' : 'text-rose-400'
-                              }`}
-                            >
-                              {liveOnline ? 'ONLINE' : 'OFFLINE'}
-                            </span>
-                          </div>
+                          <span
+                            className={`font-semibold ${
+                              liveOnline ? 'text-emerald-700' : 'text-slate-500'
+                            }`}
+                          >
+                            {liveOnline ? 'Trực tuyến' : 'Ngoại tuyến'}
+                          </span>
                         </td>
-                        <td className="py-3.5 px-4 text-slate-400 font-mono text-[11px]">
-                          <div>v{dev.fw_version} | {dev.hw_version}</div>
-                          {liveMac && <div className="text-[10px] text-slate-500">MAC: {liveMac}</div>}
-                        </td>
-                        <td className="py-3.5 px-4 text-slate-400 text-[11px]">
-                          {dev.last_seen_at
-                            ? new Date(dev.last_seen_at).toLocaleTimeString('vi-VN', {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                                second: '2-digit',
-                              })
-                            : 'Chưa có dữ liệu'}
-                        </td>
-                        <td
-                          className="py-3.5 px-4 text-right"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              onClick={() => navigate(`/devices/${dev.id}`)}
-                              title="Xem chi tiết vi khí hậu & điều khiển"
-                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
-                            >
-                              <ExternalLink className="w-3.5 h-3.5" />
-                            </button>
-
-                            {!isViewer && (
-                              <>
-                                {needsActivation && (
-                                  <button
-                                    onClick={() => handleActivate(dev)}
-                                    title="Kích hoạt thiết bị (ACTIVE)"
-                                    className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 transition"
-                                  >
-                                    <PlayCircle className="w-3.5 h-3.5" />
-                                  </button>
-                                )}
-
-                                <button
-                                  onClick={() => openEditModal(dev)}
-                                  title="Sửa tên / chuyển khu vực kho"
-                                  className="p-1.5 rounded-lg bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700 transition"
-                                >
-                                  <Pencil className="w-3.5 h-3.5" />
-                                </button>
-
-                                {!isDecommissioned && (
-                                  <>
-                                    <button
-                                      onClick={() => handleToggleMaintenance(dev)}
-                                      title={isMaintenance ? 'Tắt chế độ bảo trì' : 'Bật chế độ bảo trì'}
-                                      className={`p-1.5 rounded-lg border transition ${
-                                        isMaintenance
-                                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
-                                          : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
-                                      }`}
-                                    >
-                                      <Wrench className="w-3.5 h-3.5" />
-                                    </button>
-
-                                    {isAdmin && (
-                                      <>
-                                        {isSuspended ? (
-                                          <button
-                                            onClick={() => handleUnsuspend(dev)}
-                                            title="Mở đình chỉ thiết bị"
-                                            className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 transition"
-                                          >
-                                            <RotateCcw className="w-3.5 h-3.5" />
-                                          </button>
-                                        ) : (
-                                          <button
-                                            onClick={() => setSuspendModalDevice(dev)}
-                                            title="Đình chỉ (Suspend)"
-                                            className="p-1.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition"
-                                          >
-                                            <Ban className="w-3.5 h-3.5" />
-                                          </button>
-                                        )}
-
-                                        <button
-                                          onClick={() => handleDecommission(dev)}
-                                          title="Thu hồi vĩnh viễn (Decommission)"
-                                          className="p-1.5 rounded-lg bg-red-950/40 text-red-400 border border-red-900/60 hover:bg-red-900/80 hover:text-white transition"
-                                        >
-                                          <Ban className="w-3.5 h-3.5" />
-                                        </button>
-                                      </>
-                                    )}
-                                  </>
-                                )}
-
-                                {isAdmin && (
-                                  <button
-                                    onClick={() => handleDeletePermanent(dev)}
-                                    title="Xóa hẳn khỏi CSDL"
-                                    className="p-1.5 rounded-lg bg-rose-950/60 text-rose-300 border border-rose-800/70 hover:bg-rose-800 hover:text-white transition"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                )}
-                              </>
-                            )}
-                          </div>
+                        <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            onClick={() => navigate(`/devices/${dev.id}`)}
+                            className="px-3 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold text-[11px]"
+                          >
+                            Chi tiết &amp; Ngoại vi
+                          </button>
                         </td>
                       </tr>
                     );
@@ -869,258 +648,51 @@ export const DevicesPage: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL: ONBOARD NEW DEVICE */}
+      {/* MODAL: ONBOARD */}
       {isOnboardModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-5">
-            {!generatedToken ? (
-              <>
-                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                  <div className="flex items-center gap-2">
-                    <Cpu className="w-5 h-5 text-amber-500" />
-                    <h2 className="text-lg font-bold text-slate-100">Onboard Thiết bị Mới</h2>
-                  </div>
-                  <button
-                    onClick={closeOnboardModal}
-                    className="text-slate-400 hover:text-slate-200 text-sm"
-                  >
-                    ✕
-                  </button>
-                </div>
-
-                <form onSubmit={handleOnboardSubmit} className="space-y-4 text-xs">
-                  <div>
-                    <label className="block text-slate-300 font-semibold mb-1">
-                      Mã định danh Thiết bị (Device Code) *
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="VD: DEV_SILO_03"
-                      value={newDeviceCode}
-                      onChange={(e) => setNewDeviceCode(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-amber-500 font-mono"
-                      required
-                    />
-                    <p className="text-[11px] text-slate-500 mt-1">
-                      Dùng làm MQTT ClientId và topic routing: grain/devices/DEV_SILO_XX/telemetry
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-300 font-semibold mb-1">
-                      Tên gọi hiển thị *
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="VD: Cảm biến Silo Thóc Đông Hải 03"
-                      value={newDeviceName}
-                      onChange={(e) => setNewDeviceName(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-amber-500"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-300 font-semibold mb-1">
-                      Khu vực Silo Lưu trữ (Zone) *
-                    </label>
-                    <select
-                      value={newZoneId}
-                      onChange={(e) => setNewZoneId(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-amber-500"
-                    >
-                      {zones.map((z) => (
-                        <option key={z.id} value={z.id}>
-                          {z.name} ({z.grain_type} - Target MC: {z.target_mc}%)
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-slate-300 font-semibold mb-1">
-                        Firmware Version
-                      </label>
-                      <input
-                        type="text"
-                        value={newFwVersion}
-                        onChange={(e) => setNewFwVersion(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-slate-300 font-semibold mb-1">
-                        Hardware Version
-                      </label>
-                      <input
-                        type="text"
-                        value={newHwVersion}
-                        onChange={(e) => setNewHwVersion(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-800">
-                    <button
-                      type="button"
-                      onClick={closeOnboardModal}
-                      className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-semibold text-xs"
-                    >
-                      Huỷ bỏ
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={isSubmittingOnboard}
-                      className="px-4 py-2 rounded-xl bg-amber-500 text-slate-950 hover:bg-amber-400 font-bold text-xs flex items-center gap-2"
-                    >
-                      {isSubmittingOnboard ? 'Đang khởi tạo...' : 'Thêm Thiết Bị Vào Hệ Thống'}
-                    </button>
-                  </div>
-                </form>
-              </>
-            ) : (
-              /* Màn hình hiển thị Secret Token duy nhất 1 lần theo đặc tả */
-              <div className="space-y-4">
-                <div className="flex items-center gap-2 text-emerald-400">
-                  <Check className="w-5 h-5" />
-                  <h2 className="text-lg font-bold text-slate-100">
-                    Khởi tạo Thiết bị Thành công!
-                  </h2>
-                </div>
-
-                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2.5">
-                  <AlertTriangle className="w-5 h-5 shrink-0 text-amber-400 mt-0.5" />
-                  <div>
-                    <div className="font-bold">LƯU Ý QUAN TRỌNG:</div>
-                    <div>
-                      Secret token chỉ hiển thị <strong>DUY NHẤT 1 LẦN NÀY</strong>. Hãy sao chép và nạp vào mã nguồn firmware ESP32 của thiết bị ngay bây giờ!
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-300">
-                    Device Secret Token (Bearer Token):
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      readOnly
-                      value={generatedToken}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 pr-20 text-xs text-amber-300 font-mono select-all focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleCopyToken}
-                      className="absolute right-1.5 top-1/2 -translate-y-1/2 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition"
-                    >
-                      {hasCopiedToken ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                      <span>{hasCopiedToken ? 'Đã chép' : 'Copy'}</span>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="pt-3 border-t border-slate-800 flex justify-end">
-                  <button
-                    onClick={closeOnboardModal}
-                    className="px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs transition"
-                  >
-                    Hoàn tất & Đóng
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: SUSPEND DEVICE */}
-      {suspendModalDevice && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
-            <div className="flex items-center gap-2 text-rose-400">
-              <ShieldAlert className="w-5 h-5" />
-              <h2 className="text-base font-bold text-slate-100">
-                Đình chỉ Thiết bị (SUSPEND)
-              </h2>
-            </div>
-
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Bạn đang thực hiện đình chỉ thiết bị{' '}
-              <strong className="text-amber-400 font-mono">{suspendModalDevice.device_code}</strong>. Thiết bị sẽ bị cắt kết nối MQTT và chặn telemetry cho đến khi được phục hồi.
-            </p>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-300">Lý do đình chỉ:</label>
-              <textarea
-                rows={3}
-                value={suspendReason}
-                onChange={(e) => setSuspendReason(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-100 focus:outline-none focus:border-rose-500"
-              />
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
-              <button
-                type="button"
-                onClick={() => setSuspendModalDevice(null)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs"
-              >
-                Huỷ bỏ
-              </button>
-              <button
-                type="button"
-                onClick={handleSuspendSubmit}
-                disabled={isSubmittingSuspend}
-                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-2"
-              >
-                {isSubmittingSuspend ? 'Đang xử lý...' : 'Xác nhận Đình chỉ'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: EDIT DEVICE */}
-      {editModalDevice && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
               <div className="flex items-center gap-2">
-                <Pencil className="w-4 h-4 text-amber-400" />
-                <h2 className="text-base font-bold text-slate-100">
-                  Chỉnh sửa Thiết bị{' '}
-                  <span className="font-mono text-amber-400">{editModalDevice.device_code}</span>
-                </h2>
+                <Cpu className="w-5 h-5 text-emerald-600" />
+                <h2 className="text-lg font-bold text-slate-900">Thêm Thiết bị Mới</h2>
               </div>
-              <button
-                onClick={() => setEditModalDevice(null)}
-                className="text-slate-400 hover:text-slate-200"
-              >
-                <X className="w-4 h-4" />
+              <button onClick={closeOnboardModal} className="text-slate-400 hover:text-slate-700 text-sm">
+                ✕
               </button>
             </div>
 
-            <form onSubmit={handleEditSubmit} className="space-y-3.5 text-xs">
+            <form onSubmit={handleOnboardSubmit} className="space-y-4 text-xs">
               <div>
-                <label className="block text-slate-300 font-semibold mb-1">Tên gọi hiển thị *</label>
+                <label className="block text-slate-700 font-semibold mb-1">Mã thiết bị *</label>
                 <input
                   type="text"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-amber-500"
+                  placeholder="VD: DEV_SILO_03"
+                  value={newDeviceCode}
+                  onChange={(e) => setNewDeviceCode(e.target.value)}
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:outline-none focus:border-emerald-500"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-slate-300 font-semibold mb-1">Khu vực Silo Lưu trữ *</label>
+                <label className="block text-slate-700 font-semibold mb-1">Tên hiển thị *</label>
+                <input
+                  type="text"
+                  placeholder="VD: Cảm biến Kho Silo C1"
+                  value={newDeviceName}
+                  onChange={(e) => setNewDeviceName(e.target.value)}
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:outline-none focus:border-emerald-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">Khu vực kho *</label>
                 <select
-                  value={editZoneId}
-                  onChange={(e) => setEditZoneId(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-amber-500"
+                  value={newZoneId}
+                  onChange={(e) => setNewZoneId(e.target.value)}
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:outline-none focus:border-emerald-500"
                 >
                   {zones.map((z) => (
                     <option key={z.id} value={z.id}>
@@ -1130,41 +702,20 @@ export const DevicesPage: React.FC = () => {
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Firmware Version</label>
-                  <input
-                    type="text"
-                    value={editFwVersion}
-                    onChange={(e) => setEditFwVersion(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Hardware Version</label>
-                  <input
-                    type="text"
-                    value={editHwVersion}
-                    onChange={(e) => setEditHwVersion(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-100 font-mono"
-                  />
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-200">
                 <button
                   type="button"
-                  onClick={() => setEditModalDevice(null)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs"
+                  onClick={closeOnboardModal}
+                  className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 font-semibold text-xs"
                 >
-                  Huỷ bỏ
+                  Huỷ
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingEdit}
-                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs"
+                  disabled={isSubmittingOnboard}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 font-semibold text-xs"
                 >
-                  {isSubmittingEdit ? 'Đang lưu...' : 'Lưu thay đổi'}
+                  {isSubmittingOnboard ? 'Đang thêm...' : 'Thêm Thiết bị'}
                 </button>
               </div>
             </form>
@@ -1172,50 +723,107 @@ export const DevicesPage: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL: ROTATED SECRET TOKEN */}
-      {rotatedTokenInfo && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
-            <div className="flex items-center gap-2 text-amber-400">
-              <KeyRound className="w-5 h-5" />
-              <h2 className="text-base font-bold text-slate-100">
-                Secret Token Mới — {rotatedTokenInfo.deviceCode}
-              </h2>
+      {/* MODAL: SUSPEND */}
+      {suspendModalDevice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-2 text-rose-600">
+              <ShieldAlert className="w-5 h-5" />
+              <h2 className="text-base font-bold text-slate-900">Đình chỉ thiết bị</h2>
             </div>
 
-            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs">
-              Token này chỉ hiển thị <strong>DUY NHẤT 1 LẦN</strong>. Hãy sao chép nếu bạn sử dụng xác thực HTTP/Token cho thiết bị.
-            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Thiết bị <strong>{suspendModalDevice.name}</strong> sẽ bị tạm ngưng kết nối cho đến khi được kích hoạt lại.
+            </p>
 
-            <div className="relative">
-              <input
-                type="text"
-                readOnly
-                value={rotatedTokenInfo.token}
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 pr-20 text-xs text-amber-300 font-mono select-all focus:outline-none"
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-700">Lý do:</label>
+              <textarea
+                rows={3}
+                value={suspendReason}
+                onChange={(e) => setSuspendReason(e.target.value)}
+                className="w-full bg-white border border-slate-300 rounded-xl p-3 text-xs text-slate-900 focus:outline-none focus:border-rose-500"
               />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
               <button
                 type="button"
-                onClick={() => {
-                  navigator.clipboard.writeText(rotatedTokenInfo.token);
-                  setHasCopiedRotatedToken(true);
-                  showToast('Đã sao chép token mới vào clipboard!', 'success');
-                }}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition"
+                onClick={() => setSuspendModalDevice(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs"
               >
-                {hasCopiedRotatedToken ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{hasCopiedRotatedToken ? 'Đã chép' : 'Copy'}</span>
+                Huỷ
+              </button>
+              <button
+                type="button"
+                onClick={handleSuspendSubmit}
+                disabled={isSubmittingSuspend}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs"
+              >
+                {isSubmittingSuspend ? 'Đang xử lý...' : 'Xác nhận đình chỉ'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: EDIT */}
+      {editModalDevice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <h2 className="text-base font-bold text-slate-900">
+                Sửa thông tin {editModalDevice.name}
+              </h2>
+              <button onClick={() => setEditModalDevice(null)} className="text-slate-400 hover:text-slate-700">
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="flex justify-end pt-2 border-t border-slate-800">
-              <button
-                onClick={() => setRotatedTokenInfo(null)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs"
-              >
-                Đóng
-              </button>
-            </div>
+            <form onSubmit={handleEditSubmit} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">Tên hiển thị *</label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:outline-none focus:border-emerald-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">Khu vực kho *</label>
+                <select
+                  value={editZoneId}
+                  onChange={(e) => setEditZoneId(e.target.value)}
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:outline-none focus:border-emerald-500"
+                >
+                  {zones.map((z) => (
+                    <option key={z.id} value={z.id}>
+                      {z.name} ({z.grain_type})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setEditModalDevice(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs"
+                >
+                  Huỷ
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingEdit}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs"
+                >
+                  {isSubmittingEdit ? 'Đang lưu...' : 'Lưu thay đổi'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

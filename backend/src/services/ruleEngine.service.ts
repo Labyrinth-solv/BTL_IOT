@@ -47,14 +47,14 @@ export class RuleEngineService {
     const emcCritThreshold = cfg.emc_crit_threshold ?? 14.8;
 
     // 1. KIỂM TRA HIGH_RISK (CRITICAL) - Chỉ đánh giá trên các cảm biến đang hoạt động hợp lệ
-    if (aht20_ok && humidity_air > rhCritThreshold) {
+    if (aht20_ok && humidity_air >= rhCritThreshold) {
       return {
         risk_level: RiskLevel.HIGH_RISK,
         should_turn_on_fan: true,
         alert_needed: true,
         alert_type: AlertType.HIGH_HUMIDITY,
         alert_severity: AlertSeverity.CRITICAL,
-        alert_message: `Độ ẩm không khí tăng vọt nguy hiểm (${humidity_air}%RH > ${rhCritThreshold}%RH). Nguy cơ mốc và độc tố vi nấm cực cao!`,
+        alert_message: `Độ ẩm không khí đạt ngưỡng nguy hiểm (${humidity_air}%RH >= ${rhCritThreshold}%RH). Nguy cơ mốc và độc tố vi nấm cực cao!`,
         trigger_value: humidity_air,
       };
     }
@@ -66,44 +66,44 @@ export class RuleEngineService {
         alert_needed: true,
         alert_type: AlertType.GAS_SPIKE,
         alert_severity: AlertSeverity.CRITICAL,
-        alert_message: `Nồng độ khí gas vượt ngưỡng báo động (${gas_ppm} ppm >= ${gasCritThreshold} ppm). Hạt ẩm đang lên men yếm khí tự bốc nóng!`,
+        alert_message: `Nồng độ khí gas đạt ngưỡng báo động (${gas_ppm} ppm >= ${gasCritThreshold} ppm). Hạt ẩm đang lên men yếm khí tự bốc nóng!`,
         trigger_value: gas_ppm,
       };
     }
 
-    if (aht20_ok && temperature > tempCritThreshold) {
+    if (aht20_ok && temperature >= tempCritThreshold) {
       return {
         risk_level: RiskLevel.HIGH_RISK,
         should_turn_on_fan: true,
         alert_needed: true,
         alert_type: AlertType.HIGH_TEMP,
         alert_severity: AlertSeverity.CRITICAL,
-        alert_message: `Nhiệt độ kho vượt ngưỡng nguy hiểm (${temperature}°C > ${tempCritThreshold}°C). Điểm bốc nóng cục bộ!`,
+        alert_message: `Nhiệt độ kho đạt ngưỡng nguy hiểm (${temperature}°C >= ${tempCritThreshold}°C). Điểm bốc nóng cục bộ!`,
         trigger_value: temperature,
       };
     }
 
-    if (aht20_ok && estimated_emc > emcCritThreshold) {
+    if (aht20_ok && estimated_emc >= emcCritThreshold) {
       return {
         risk_level: RiskLevel.HIGH_RISK,
         should_turn_on_fan: true,
         alert_needed: true,
         alert_type: AlertType.HIGH_HUMIDITY,
         alert_severity: AlertSeverity.CRITICAL,
-        alert_message: `Độ ẩm cân bằng hạt vượt ngưỡng an toàn nghiêm trọng (${estimated_emc}%MC > ${emcCritThreshold}%MC).`,
+        alert_message: `Độ ẩm cân bằng hạt đạt ngưỡng nghiêm trọng (${estimated_emc}%MC >= ${emcCritThreshold}%MC).`,
         trigger_value: estimated_emc,
       };
     }
 
     // 2. KIỂM TRA WARNING (CẢNH BÁO)
-    if (aht20_ok && humidity_air > rhWarnThreshold) {
+    if (aht20_ok && humidity_air >= rhWarnThreshold) {
       return {
         risk_level: RiskLevel.WARNING,
         should_turn_on_fan: true,
         alert_needed: true,
         alert_type: AlertType.HIGH_HUMIDITY,
         alert_severity: AlertSeverity.WARNING,
-        alert_message: `Độ ẩm không khí ở mức cảnh báo (${humidity_air}%RH > ${rhWarnThreshold}%RH). Đang bật quạt thông gió đối lưu.`,
+        alert_message: `Độ ẩm không khí đạt ngưỡng cảnh báo (${humidity_air}%RH >= ${rhWarnThreshold}%RH). Đang bật quạt thông gió đối lưu.`,
         trigger_value: humidity_air,
       };
     }
@@ -115,31 +115,31 @@ export class RuleEngineService {
         alert_needed: true,
         alert_type: AlertType.GAS_SPIKE,
         alert_severity: AlertSeverity.WARNING,
-        alert_message: `Phát hiện nồng độ khí gas tăng nhẹ (${gas_ppm} ppm >= ${gasWarnThreshold} ppm).`,
+        alert_message: `Phát hiện nồng độ khí gas đạt ngưỡng cảnh báo (${gas_ppm} ppm >= ${gasWarnThreshold} ppm).`,
         trigger_value: gas_ppm,
       };
     }
 
-    if (aht20_ok && temperature > tempWarnThreshold) {
+    if (aht20_ok && temperature >= tempWarnThreshold) {
       return {
         risk_level: RiskLevel.WARNING,
         should_turn_on_fan: true,
         alert_needed: true,
         alert_type: AlertType.HIGH_TEMP,
         alert_severity: AlertSeverity.WARNING,
-        alert_message: `Nhiệt độ khối hạt cao hơn mức tối ưu (${temperature}°C > ${tempWarnThreshold}°C). Nguy cơ côn trùng mọt hoạt động.`,
+        alert_message: `Nhiệt độ khối hạt đạt ngưỡng cảnh báo (${temperature}°C >= ${tempWarnThreshold}°C). Nguy cơ côn trùng mọt hoạt động.`,
         trigger_value: temperature,
       };
     }
 
-    if (aht20_ok && estimated_emc > emcWarnThreshold) {
+    if (aht20_ok && estimated_emc >= emcWarnThreshold) {
       return {
         risk_level: RiskLevel.WARNING,
         should_turn_on_fan: true,
         alert_needed: true,
         alert_type: AlertType.HIGH_HUMIDITY,
         alert_severity: AlertSeverity.WARNING,
-        alert_message: `Độ ẩm cân bằng hạt tăng nhẹ (${estimated_emc}%MC > ${emcWarnThreshold}%MC).`,
+        alert_message: `Độ ẩm cân bằng hạt đạt ngưỡng cảnh báo (${estimated_emc}%MC >= ${emcWarnThreshold}%MC).`,
         trigger_value: estimated_emc,
       };
     }

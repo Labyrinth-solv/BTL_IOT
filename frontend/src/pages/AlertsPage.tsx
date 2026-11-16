@@ -9,11 +9,9 @@ import {
   AlertCircle,
   CheckCircle,
   Clock,
-  Filter,
   RefreshCw,
   Search,
   MessageSquare,
-  ShieldAlert,
   Flame,
   Droplets,
   Thermometer,
@@ -24,7 +22,7 @@ import {
 } from 'lucide-react';
 
 export const AlertsPage: React.FC = () => {
-  const { isAdmin, isViewer, showToast, user } = useAuth();
+  const { isAdmin, isViewer, showToast } = useAuth();
   const { recentAlerts: liveAlerts } = useSocket();
 
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -34,24 +32,21 @@ export const AlertsPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'CARD' | 'TABLE'>('CARD');
 
-  // Ack Modal
   const [ackModalAlert, setAckModalAlert] = useState<Alert | null>(null);
   const [ackNote, setAckNote] = useState('');
   const [isSubmittingAck, setIsSubmittingAck] = useState(false);
 
-  // Resolve Modal
   const [resolveModalAlert, setResolveModalAlert] = useState<Alert | null>(null);
   const [resolveNote, setResolveNote] = useState('');
   const [isSubmittingResolve, setIsSubmittingResolve] = useState(false);
 
-  // Xóa cảnh báo
   const handleDeleteAlert = async (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (!window.confirm('Bạn có chắc chắn muốn xóa cảnh báo này không?')) return;
+    if (!window.confirm('Bạn có chắc muốn xóa cảnh báo này không?')) return;
     try {
       const res = await api.deleteAlert(id);
       if (res.success) {
-        showToast('Đã xóa cảnh báo thành công', 'success');
+        showToast('Đã xóa cảnh báo', 'success');
         setAlerts((prev) => prev.filter((a) => a.id !== id));
       }
     } catch (err: any) {
@@ -59,21 +54,20 @@ export const AlertsPage: React.FC = () => {
     }
   };
 
-  // Dọn dẹp hàng loạt cảnh báo
   const handleClearAlerts = async (all: boolean = false) => {
     const confirmMsg = all
-      ? 'Bạn có chắc chắn muốn XÓA TOÀN BỘ tất cả cảnh báo trong hệ thống để làm sạch không?'
-      : 'Bạn có chắc muốn dọn sạch tất cả cảnh báo đã hoàn tất (RESOLVED) không?';
+      ? 'Bạn có chắc muốn XÓA TẤT CẢ cảnh báo trong hệ thống không?'
+      : 'Bạn có chắc muốn dọn các cảnh báo đã giải quyết xong không?';
     if (!window.confirm(confirmMsg)) return;
 
     try {
       const res = await api.clearAlerts(all);
       if (res.success) {
-        showToast(res.message || 'Dọn dẹp cảnh báo thành công', 'success');
+        showToast(res.message || 'Đã dọn cảnh báo', 'success');
         fetchAlerts();
       }
     } catch (err: any) {
-      showToast(err.message || 'Lỗi khi dọn dẹp cảnh báo', 'error');
+      showToast(err.message || 'Lỗi khi dọn cảnh báo', 'error');
     }
   };
 
@@ -95,7 +89,6 @@ export const AlertsPage: React.FC = () => {
     fetchAlerts();
   }, []);
 
-  // Khi có alert mới từ WebSocket, refresh danh sách
   useEffect(() => {
     if (liveAlerts.length > 0) {
       fetchAlerts();
@@ -108,7 +101,7 @@ export const AlertsPage: React.FC = () => {
     try {
       const res = await api.acknowledgeAlert(ackModalAlert.id, ackNote);
       if (res.success) {
-        showToast(`Đã xác nhận (ACK) cảnh báo: ${ackModalAlert.message}`, 'success');
+        showToast('Đã xác nhận tiếp nhận cảnh báo', 'success');
         setAckModalAlert(null);
         setAckNote('');
         fetchAlerts();
@@ -126,7 +119,7 @@ export const AlertsPage: React.FC = () => {
     try {
       const res = await api.resolveAlert(resolveModalAlert.id, resolveNote);
       if (res.success) {
-        showToast(`Đã hoàn tất xử lý cảnh báo: ${resolveModalAlert.message}`, 'success');
+        showToast('Đã đóng cảnh báo', 'success');
         setResolveModalAlert(null);
         setResolveNote('');
         fetchAlerts();
@@ -140,35 +133,35 @@ export const AlertsPage: React.FC = () => {
 
   const getAlertIcon = (type: string, message?: string) => {
     if (message?.startsWith('[Lỗi cảm biến]')) {
-      return <AlertCircle className="w-4 h-4 text-rose-400 animate-pulse" />;
+      return <AlertCircle className="w-4 h-4 text-rose-600" />;
     }
     switch (type) {
       case 'HIGH_HUMIDITY':
-        return <Droplets className="w-4 h-4 text-sky-400" />;
+        return <Droplets className="w-4 h-4 text-sky-600" />;
       case 'HIGH_TEMP':
-        return <Thermometer className="w-4 h-4 text-orange-400" />;
+        return <Thermometer className="w-4 h-4 text-orange-600" />;
       case 'GAS_SPIKE':
-        return <Flame className="w-4 h-4 text-rose-500 animate-pulse" />;
+        return <Flame className="w-4 h-4 text-rose-600" />;
       case 'DEVICE_OFFLINE':
-        return <WifiOff className="w-4 h-4 text-slate-400" />;
+        return <WifiOff className="w-4 h-4 text-slate-500" />;
       default:
-        return <AlertTriangle className="w-4 h-4 text-amber-400" />;
+        return <AlertTriangle className="w-4 h-4 text-amber-600" />;
     }
   };
 
   const getSeverityBadge = (sev: AlertSeverity) => {
     if (sev === 'CRITICAL') {
       return (
-        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 flex items-center gap-1 w-fit">
-          <AlertCircle className="w-3 h-3 text-rose-400" />
-          CRITICAL
+        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200 flex items-center gap-1 w-fit">
+          <AlertCircle className="w-3 h-3 text-rose-600" />
+          Nghiêm trọng
         </span>
       );
     }
     return (
-      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1 w-fit">
-        <AlertTriangle className="w-3 h-3 text-amber-400" />
-        WARNING
+      <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 flex items-center gap-1 w-fit">
+        <AlertTriangle className="w-3 h-3 text-amber-600" />
+        Cảnh báo
       </span>
     );
   };
@@ -177,20 +170,20 @@ export const AlertsPage: React.FC = () => {
     switch (status) {
       case 'NEW':
         return (
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30 animate-pulse">
-            NEW
+          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+            Mới
           </span>
         );
       case 'ACKNOWLEDGED':
         return (
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">
-            ACKNOWLEDGED
+          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+            Đang xử lý
           </span>
         );
       case 'RESOLVED':
         return (
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-            RESOLVED
+          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+            Đã xong
           </span>
         );
       default:
@@ -213,15 +206,14 @@ export const AlertsPage: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-100 flex items-center gap-2">
-            <BellRing className="w-7 h-7 text-amber-500" />
-            <span>Trung tâm Cảnh báo Vi khí hậu Silo</span>
+          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+            <BellRing className="w-6 h-6 text-amber-600" />
+            <span>Trung tâm Cảnh báo</span>
           </h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Xử lý sự cố vi khí hậu theo quy trình SOP (New &rarr; Operator ACK &rarr; Resolved)
+          <p className="text-sm text-slate-500 mt-0.5">
+            Theo dõi và xác nhận xử lý các sự cố trong kho
           </p>
         </div>
 
@@ -229,29 +221,27 @@ export const AlertsPage: React.FC = () => {
           {!isViewer && (
             <button
               onClick={() => handleClearAlerts(false)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition"
-              title="Dọn dẹp các cảnh báo đã xử lý xong để làm gọn danh sách"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold border border-slate-200 shadow-sm transition"
             >
-              <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Dọn cảnh báo đã xong</span>
+              <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Dọn mục đã xong</span>
             </button>
           )}
 
           {isAdmin && (
             <button
               onClick={() => handleClearAlerts(true)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-xs font-semibold border border-rose-500/30 transition"
-              title="Xóa toàn bộ tất cả cảnh báo để reset lại hệ thống"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold border border-rose-200 transition"
             >
-              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-              <span>Xóa tất cả (Reset)</span>
+              <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+              <span>Xóa tất cả</span>
             </button>
           )}
 
           <button
             onClick={fetchAlerts}
             disabled={isLoading}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold border border-slate-200 shadow-sm transition"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             <span>Làm mới</span>
@@ -259,15 +249,12 @@ export const AlertsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Filter Tabs & Search */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-4">
-        {/* Status Tabs */}
-        <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-3">
+      {/* Filter Bar */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-4 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 pb-3">
           {['ALL', 'NEW', 'ACKNOWLEDGED', 'RESOLVED'].map((tab) => {
             const count =
-              tab === 'ALL'
-                ? alerts.length
-                : alerts.filter((a) => a.status === tab).length;
+              tab === 'ALL' ? alerts.length : alerts.filter((a) => a.status === tab).length;
 
             return (
               <button
@@ -275,8 +262,8 @@ export const AlertsPage: React.FC = () => {
                 onClick={() => setStatusFilter(tab)}
                 className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition ${
                   statusFilter === tab
-                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                    : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'bg-slate-100 text-slate-600 hover:text-slate-900'
                 }`}
               >
                 {tab === 'ALL'
@@ -292,57 +279,53 @@ export const AlertsPage: React.FC = () => {
           })}
         </div>
 
-        {/* Filter controls & View Mode Toggle */}
         <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
           <div className="relative flex-1">
             <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              placeholder="Tìm theo nội dung cảnh báo, thiết bị..."
+              placeholder="Tìm theo nội dung cảnh báo hoặc thiết bị..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-500 transition"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 transition"
             />
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-400 whitespace-nowrap">Mức độ:</span>
+              <span className="text-xs text-slate-500 whitespace-nowrap">Mức độ:</span>
               <select
                 value={severityFilter}
                 onChange={(e) => setSeverityFilter(e.target.value)}
-                className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
+                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:border-emerald-500"
               >
-                <option value="ALL">Tất cả mức độ</option>
-                <option value="CRITICAL">CRITICAL (Nghiêm trọng)</option>
-                <option value="WARNING">WARNING (Cảnh báo)</option>
+                <option value="ALL">Tất cả</option>
+                <option value="CRITICAL">Nghiêm trọng</option>
+                <option value="WARNING">Cảnh báo</option>
               </select>
             </div>
 
-            {/* View Mode Toggle: Card View vs Table View */}
-            <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
               <button
                 type="button"
                 onClick={() => setViewMode('CARD')}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
                   viewMode === 'CARD'
-                    ? 'bg-amber-500 text-slate-950 shadow-sm font-bold'
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-800'
                 }`}
-                title="Dạng thẻ tự động xuống hàng - Không cần kéo cuộn ngang"
               >
                 <LayoutList className="w-3.5 h-3.5" />
-                <span>Thẻ Co Giãn</span>
+                <span>Thẻ</span>
               </button>
               <button
                 type="button"
                 onClick={() => setViewMode('TABLE')}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
                   viewMode === 'TABLE'
-                    ? 'bg-amber-500 text-slate-950 shadow-sm font-bold'
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-800'
                 }`}
-                title="Dạng bảng dữ liệu truyền thống"
               >
                 <Table className="w-3.5 h-3.5" />
                 <span>Bảng</span>
@@ -352,15 +335,13 @@ export const AlertsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Danh Sách Cảnh Báo (Tự động xuống hàng theo chế độ Card hoặc Bảng) */}
       {filteredAlerts.length === 0 ? (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center text-slate-400 shadow-xl">
-          <CheckCircle className="w-12 h-12 mx-auto text-emerald-500/60 mb-3" />
-          <div className="text-base font-semibold text-slate-200">Không có sự cố vi khí hậu nào cần xử lý</div>
-          <div className="text-xs text-slate-500 mt-1">Các Silo bảo quản thóc gạo đang nằm trong giới hạn an toàn TCVN 8370.</div>
+        <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-slate-500 shadow-sm">
+          <CheckCircle className="w-12 h-12 mx-auto text-emerald-500 mb-3" />
+          <div className="text-base font-semibold text-slate-800">Không có cảnh báo nào</div>
+          <div className="text-xs text-slate-500 mt-1">Các khu vực kho hiện đang an toàn.</div>
         </div>
       ) : viewMode === 'CARD' ? (
-        /* DẠNG THẺ TỰ CO GIÃN - XUỐNG HÀNG TỰ NHIÊN, KHÔNG CẦN CUỘN NGANG */
         <div className="space-y-3">
           {filteredAlerts.map((alert) => {
             const isNew = alert.status === 'NEW';
@@ -370,65 +351,53 @@ export const AlertsPage: React.FC = () => {
             return (
               <div
                 key={alert.id}
-                className={`bg-slate-900 border rounded-2xl p-4 shadow-xl transition-all ${
+                className={`bg-white border rounded-2xl p-4 shadow-sm transition-all ${
                   isNew
-                    ? 'border-rose-500/40 bg-rose-950/10'
+                    ? 'border-rose-200 bg-rose-50/30'
                     : isAck
-                    ? 'border-sky-500/40 bg-sky-950/10'
-                    : 'border-slate-800 hover:border-slate-700'
+                    ? 'border-sky-200 bg-sky-50/30'
+                    : 'border-slate-200'
                 }`}
               >
-                {/* Hàng 1: Metadata tự xuống hàng theo chiều ngang */}
-                <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800/80">
+                <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
                   <div className="flex flex-wrap items-center gap-2">
                     {getSeverityBadge(alert.severity)}
-                    <div className="flex items-center gap-1.5 font-semibold text-slate-200 text-xs px-2 py-0.5 rounded bg-slate-950 border border-slate-800">
-                      {getAlertIcon(alert.alert_type, alert.message)}
-                      <span>{alert.message?.startsWith('[Lỗi cảm biến]') ? 'SENSOR_FAULT' : alert.alert_type}</span>
-                    </div>
                     {getStatusBadge(alert.status)}
-                    <span className="text-[11px] text-slate-400 font-mono flex items-center gap-1">
-                      <Clock className="w-3 h-3 text-slate-500" />
+                    <span className="text-xs text-slate-500 flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5 text-slate-400" />
                       {new Date(alert.created_at).toLocaleString('vi-VN')}
                     </span>
                   </div>
 
-                  {/* Thiết bị & Kho lưu trữ */}
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-amber-400 font-bold text-xs px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30">
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="font-semibold text-slate-700 bg-slate-100 px-2.5 py-1 rounded-full">
                       {alert.device?.device_code || alert.device_id}
                     </span>
-                    <span className="text-xs text-slate-400 hidden sm:inline">
+                    <span className="text-slate-500 hidden sm:inline">
                       {alert.zone?.name || 'Kho ngũ cốc'}
                     </span>
                   </div>
                 </div>
 
-                {/* Hàng 2: Nội dung cảnh báo và Nút thao tác (Tự động xuống hàng khi màn hình hẹp) */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-3">
-                  <div className="space-y-1 flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-slate-100 break-words leading-relaxed">
+                  <div className="flex items-start gap-2.5 flex-1 min-w-0">
+                    <div className="mt-0.5 shrink-0">{getAlertIcon(alert.alert_type, alert.message)}</div>
+                    <div className="text-sm font-semibold text-slate-900 break-words leading-relaxed">
                       {alert.message}
                     </div>
-                    {alert.trigger_value !== undefined && (
-                      <div className="text-xs text-slate-400">
-                        Giá trị đo kích hoạt: <span className="text-amber-400 font-mono font-bold">{alert.trigger_value}</span>
-                      </div>
-                    )}
                   </div>
 
-                  {/* Nút hành động SOP */}
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
                     {!isViewer && isNew && (
                       <button
                         onClick={() => {
                           setAckModalAlert(alert);
-                          setAckNote('Đã tiếp nhận cảnh báo, đang cử nhân viên kiểm tra quạt.');
+                          setAckNote('Đã tiếp nhận, đang kiểm tra kho.');
                         }}
-                        className="px-3.5 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs transition flex items-center gap-1.5 shadow-md shadow-sky-500/20"
+                        className="px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs transition flex items-center gap-1.5 shadow-sm"
                       >
                         <MessageSquare className="w-3.5 h-3.5" />
-                        <span>Xác nhận (ACK)</span>
+                        <span>Xác nhận</span>
                       </button>
                     )}
 
@@ -436,27 +405,27 @@ export const AlertsPage: React.FC = () => {
                       <button
                         onClick={() => {
                           setResolveModalAlert(alert);
-                          setResolveNote('Đã thông gió cưỡng bức, độ ẩm và khí gas trở lại an toàn TCVN 8370.');
+                          setResolveNote('Đã xử lý xong, thông số kho đã ổn định.');
                         }}
-                        className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
+                        className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs transition flex items-center gap-1.5 shadow-sm"
                       >
                         <CheckCircle className="w-3.5 h-3.5" />
-                        <span>Hoàn tất (Resolve)</span>
+                        <span>Hoàn tất</span>
                       </button>
                     )}
 
                     {isResolved && (
-                      <span className="text-emerald-400 font-semibold text-xs flex items-center gap-1 bg-emerald-500/10 px-3 py-1.5 rounded-xl border border-emerald-500/20">
+                      <span className="text-emerald-700 font-semibold text-xs flex items-center gap-1 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200">
                         <CheckCircle className="w-3.5 h-3.5" />
-                        <span>Đã giải quyết xong</span>
+                        <span>Đã xong</span>
                       </span>
                     )}
 
                     {!isViewer && (
                       <button
                         onClick={(e) => handleDeleteAlert(alert.id, e)}
-                        title="Xóa cảnh báo này"
-                        className="p-2 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 border border-slate-700/80 hover:border-rose-500/40 transition"
+                        title="Xóa cảnh báo"
+                        className="p-2 rounded-xl bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200 transition"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -464,19 +433,10 @@ export const AlertsPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Hàng 3: Ghi chú tiếp nhận nếu có */}
                 {alert.ack_by && (
-                  <div className="mt-3 pt-2.5 border-t border-slate-800/80 text-xs text-slate-400 flex flex-wrap items-center gap-2 bg-slate-950/40 -mx-4 -mb-4 p-3 rounded-b-2xl">
-                    <span className="text-slate-300 font-semibold flex items-center gap-1">
-                      <CheckCircle className="w-3.5 h-3.5 text-sky-400" />
-                      {alert.ack_by.full_name}:
-                    </span>
-                    <span className="text-slate-300 italic">"{alert.ack_note || 'Đã tiếp nhận xử lý'}"</span>
-                    {alert.resolved_at && (
-                      <span className="text-[11px] text-slate-500 sm:ml-auto">
-                        Đã đóng: {new Date(alert.resolved_at).toLocaleTimeString('vi-VN')}
-                      </span>
-                    )}
+                  <div className="mt-3 pt-2.5 border-t border-slate-100 text-xs text-slate-600 flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-slate-800">{alert.ack_by.full_name}:</span>
+                    <span className="italic">&ldquo;{alert.ack_note || 'Đã tiếp nhận xử lý'}&rdquo;</span>
                   </div>
                 )}
               </div>
@@ -484,36 +444,28 @@ export const AlertsPage: React.FC = () => {
           })}
         </div>
       ) : (
-        /* DẠNG BẢNG (TABLE VIEW) VỚI CÁC CỘT ĐƯỢC CẢI TIẾN WRAP */
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 uppercase font-semibold tracking-wider">
+                <tr className="border-b border-slate-200 bg-slate-50 text-slate-500 uppercase font-semibold tracking-wider">
                   <th className="py-3.5 px-3 whitespace-nowrap">Thời gian</th>
                   <th className="py-3.5 px-3">Mức độ</th>
-                  <th className="py-3.5 px-3">Loại sự cố</th>
-                  <th className="py-3.5 px-3">Nội dung cảnh báo</th>
-                  <th className="py-3.5 px-3">Thiết bị & Kho</th>
+                  <th className="py-3.5 px-3">Nội dung</th>
+                  <th className="py-3.5 px-3">Thiết bị</th>
                   <th className="py-3.5 px-3">Trạng thái</th>
-                  <th className="py-3.5 px-3">Ghi chú ACK</th>
-                  <th className="py-3.5 px-3 text-right whitespace-nowrap">Thao tác SOP</th>
+                  <th className="py-3.5 px-3 text-right whitespace-nowrap">Thao tác</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800 text-slate-200">
+              <tbody className="divide-y divide-slate-100 text-slate-700">
                 {filteredAlerts.map((alert) => {
                   const isNew = alert.status === 'NEW';
                   const isAck = alert.status === 'ACKNOWLEDGED';
                   const isResolved = alert.status === 'RESOLVED';
 
                   return (
-                    <tr
-                      key={alert.id}
-                      className={`hover:bg-slate-800/40 transition-colors ${
-                        isNew ? 'bg-rose-500/5' : ''
-                      }`}
-                    >
-                      <td className="py-3.5 px-3 text-slate-400 font-mono text-[11px] whitespace-nowrap">
+                    <tr key={alert.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="py-3.5 px-3 text-slate-500 whitespace-nowrap">
                         {new Date(alert.created_at).toLocaleString('vi-VN', {
                           day: '2-digit',
                           month: '2-digit',
@@ -522,90 +474,47 @@ export const AlertsPage: React.FC = () => {
                         })}
                       </td>
                       <td className="py-3.5 px-3">{getSeverityBadge(alert.severity)}</td>
-                      <td className="py-3.5 px-3">
-                        <div className="flex items-center gap-1 font-semibold text-slate-300">
-                          {getAlertIcon(alert.alert_type, alert.message)}
-                          <span className="truncate">
-                            {alert.message?.startsWith('[Lỗi cảm biến]') ? 'SENSOR_FAULT' : alert.alert_type}
-                          </span>
-                        </div>
+                      <td className="py-3.5 px-3 max-w-sm break-words font-medium text-slate-900">
+                        {alert.message}
                       </td>
-                      <td className="py-3.5 px-3 max-w-xs break-words">
-                        <div className="font-medium text-slate-100">{alert.message}</div>
-                        {alert.trigger_value !== undefined && (
-                          <div className="text-[11px] text-slate-400 mt-0.5">
-                            Kích hoạt: <span className="text-amber-400 font-mono font-bold">{alert.trigger_value}</span>
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-3">
-                        <div className="font-mono text-amber-400 font-bold">
-                          {alert.device?.device_code || alert.device_id}
-                        </div>
-                        <div className="text-[11px] text-slate-400 truncate max-w-[120px]">
-                          {alert.zone?.name || 'Kho ngũ cốc'}
-                        </div>
+                      <td className="py-3.5 px-3 font-semibold text-slate-700">
+                        {alert.device?.device_code || alert.device_id}
                       </td>
                       <td className="py-3.5 px-3">{getStatusBadge(alert.status)}</td>
-                      <td className="py-3.5 px-3 max-w-xs text-slate-400 text-[11px] break-words">
-                        {alert.ack_by ? (
-                          <div>
-                            <span className="text-slate-300 font-semibold">
-                              {alert.ack_by.full_name}:
-                            </span>{' '}
-                            <span>{alert.ack_note || 'Đã tiếp nhận'}</span>
-                          </div>
-                        ) : (
-                          <span className="italic text-slate-600">Chưa ghi nhận</span>
-                        )}
-                      </td>
                       <td className="py-3.5 px-3 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1.5">
                           {!isViewer && isNew && (
                             <button
                               onClick={() => {
                                 setAckModalAlert(alert);
-                                setAckNote('Đã tiếp nhận cảnh báo, đang cử nhân viên kiểm tra quạt.');
+                                setAckNote('Đã tiếp nhận, đang kiểm tra kho.');
                               }}
-                              className="px-2.5 py-1 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-[11px] transition flex items-center gap-1 shadow-sm"
+                              className="px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-semibold text-[11px]"
                             >
-                              <MessageSquare className="w-3 h-3" />
-                              <span>Xác nhận (ACK)</span>
+                              Xác nhận
                             </button>
                           )}
-
                           {!isViewer && (isNew || isAck) && (
                             <button
                               onClick={() => {
                                 setResolveModalAlert(alert);
-                                setResolveNote('Đã thông gió cưỡng bức, độ ẩm và khí gas trở lại an toàn TCVN 8370.');
+                                setResolveNote('Đã xử lý xong.');
                               }}
-                              className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-[11px] transition flex items-center gap-1 shadow-sm"
+                              className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[11px]"
                             >
-                              <CheckCircle className="w-3 h-3" />
-                              <span>Hoàn tất (Resolve)</span>
+                              Hoàn tất
                             </button>
                           )}
-
                           {isResolved && (
-                            <span className="text-emerald-400 font-semibold text-[11px] flex items-center justify-end gap-1">
-                              <CheckCircle className="w-3.5 h-3.5" />
-                              <span>Đã đóng</span>
-                            </span>
+                            <span className="text-emerald-700 font-semibold text-[11px]">Đã đóng</span>
                           )}
-
                           {!isViewer && (
                             <button
                               onClick={(e) => handleDeleteAlert(alert.id, e)}
-                              title="Xóa cảnh báo này"
-                              className="p-1 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 border border-slate-700 hover:border-rose-500/40 transition"
+                              className="p-1 rounded-lg bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200"
                             >
                               <Trash2 className="w-3 h-3" />
                             </button>
-                          )}
-
-                          {isViewer && !isResolved && (
-                            <span className="text-[11px] italic text-slate-500">Chỉ xem</span>
                           )}
                         </div>
                       </td>
@@ -618,103 +527,88 @@ export const AlertsPage: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL: ACKNOWLEDGE ALERT */}
+      {/* MODAL ACK */}
       {ackModalAlert && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
-            <div className="flex items-center gap-2 text-sky-400">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-2 text-sky-700">
               <MessageSquare className="w-5 h-5" />
-              <h2 className="text-base font-bold text-slate-100">
-                Xác nhận Tiếp nhận Cảnh báo (ACK)
-              </h2>
+              <h2 className="text-base font-bold text-slate-900">Xác nhận tiếp nhận cảnh báo</h2>
             </div>
 
-            <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs space-y-1">
-              <div className="text-slate-400">Nội dung sự cố:</div>
-              <div className="font-semibold text-slate-200">{ackModalAlert.message}</div>
-              <div className="text-amber-400 font-mono text-[11px]">
-                Thiết bị: {ackModalAlert.device?.device_code}
-              </div>
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1">
+              <div className="font-semibold text-slate-900">{ackModalAlert.message}</div>
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-300">
-                Ghi chú tiếp nhận (SOP Note):
-              </label>
+              <label className="text-xs font-semibold text-slate-700">Ghi chú xử lý:</label>
               <textarea
                 rows={3}
                 value={ackNote}
                 onChange={(e) => setAckNote(e.target.value)}
-                placeholder="Nhập ghi chú hoặc phương án xử lý tức thì..."
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-100 focus:outline-none focus:border-sky-500"
+                className="w-full bg-white border border-slate-300 rounded-xl p-3 text-xs text-slate-900 focus:outline-none focus:border-sky-500"
               />
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
               <button
                 type="button"
                 onClick={() => setAckModalAlert(null)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs"
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs"
               >
-                Huỷ bỏ
+                Huỷ
               </button>
               <button
                 type="button"
                 onClick={handleAcknowledgeSubmit}
                 disabled={isSubmittingAck}
-                className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs flex items-center gap-2"
+                className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs"
               >
-                {isSubmittingAck ? 'Đang gửi...' : 'Gửi Xác nhận (ACK)'}
+                {isSubmittingAck ? 'Đang gửi...' : 'Xác nhận'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAL: RESOLVE ALERT */}
+      {/* MODAL RESOLVE */}
       {resolveModalAlert && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
-            <div className="flex items-center gap-2 text-emerald-400">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-2 text-emerald-700">
               <CheckCircle className="w-5 h-5" />
-              <h2 className="text-base font-bold text-slate-100">
-                Đóng & Hoàn tất Cảnh báo (Resolve)
-              </h2>
+              <h2 className="text-base font-bold text-slate-900">Hoàn tất cảnh báo</h2>
             </div>
 
-            <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs space-y-1">
-              <div className="text-slate-400">Nội dung sự cố:</div>
-              <div className="font-semibold text-slate-200">{resolveModalAlert.message}</div>
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+              <div className="font-semibold text-slate-900">{resolveModalAlert.message}</div>
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-300">
-                Ghi chú khắc phục sự cố:
-              </label>
+              <label className="text-xs font-semibold text-slate-700">Kết quả khắc phục:</label>
               <textarea
                 rows={3}
                 value={resolveNote}
                 onChange={(e) => setResolveNote(e.target.value)}
-                placeholder="Mô tả kết quả xử lý..."
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
+                className="w-full bg-white border border-slate-300 rounded-xl p-3 text-xs text-slate-900 focus:outline-none focus:border-emerald-500"
               />
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
               <button
                 type="button"
                 onClick={() => setResolveModalAlert(null)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs"
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs"
               >
-                Huỷ bỏ
+                Huỷ
               </button>
               <button
                 type="button"
                 onClick={handleResolveSubmit}
                 disabled={isSubmittingResolve}
-                className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-2"
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs"
               >
-                {isSubmittingResolve ? 'Đang hoàn tất...' : 'Xác nhận Đã giải quyết'}
+                {isSubmittingResolve ? 'Đang lưu...' : 'Đánh dấu đã xong'}
               </button>
             </div>
           </div>

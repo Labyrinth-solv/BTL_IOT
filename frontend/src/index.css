@@ -4,8 +4,8 @@
 
 @layer base {
   body {
-    @apply bg-slate-900 text-slate-100 font-sans antialiased;
-    color-scheme: dark;
+    @apply bg-slate-50 text-slate-900 font-sans antialiased;
+    color-scheme: light;
   }
 }
 
@@ -16,16 +16,16 @@
 }
 
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: #f8fafc;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: #cbd5e1;
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #94a3b8;
 }
 
 /* Pulse animation for high risk indicator */
@@ -35,8 +35,8 @@
     transform: scale(1);
   }
   50% {
-    opacity: 0.8;
-    transform: scale(1.03);
+    opacity: 0.85;
+    transform: scale(1.02);
   }
 }
 

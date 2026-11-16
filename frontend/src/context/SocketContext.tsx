@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { getSocket } from '../services/socket';
-import { Alert, DiscoveredDevice, SensorHealth } from '../types';
+import { Alert, CustomPeripheralRuntimeState, DiscoveredDevice, SensorHealth } from '../types';
 
 interface TelemetryUpdate {
   device_id: string;
@@ -15,6 +15,7 @@ interface TelemetryUpdate {
   door_open?: boolean;
   control_mode?: string;
   sensor_health?: SensorHealth | null;
+  custom_peripherals?: CustomPeripheralRuntimeState[];
   ip_address?: string;
   mac_address?: string;
   chip_id?: string;
@@ -112,12 +113,23 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setLatestTelemetry((prev) => {
           const existing = prev[ackData.device_id];
           if (!existing) return prev;
+          const ackCpMap = ackData.current_actuators.custom_peripherals;
+          const updatedCustom =
+            ackCpMap && Array.isArray(existing.custom_peripherals)
+              ? existing.custom_peripherals.map((cp) =>
+                  ackCpMap[cp.id]
+                    ? { ...cp, state: ackCpMap[cp.id], value: ackCpMap[cp.id] === 'ON' ? 1 : 0 }
+                    : cp
+                )
+              : existing.custom_peripherals;
+
           return {
             ...prev,
             [ackData.device_id]: {
               ...existing,
               fan_state: ackData.current_actuators.fan_state ?? existing.fan_state,
               buzzer_state: ackData.current_actuators.buzzer_state ?? existing.buzzer_state,
+              custom_peripherals: updatedCustom,
             },
           };
         });

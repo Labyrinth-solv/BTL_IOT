@@ -30,6 +30,7 @@ export class DeviceController {
           ...dev,
           sensor_health: diag?.sensor_health ?? null,
           door_open: diag?.door_open ?? null,
+          custom_peripherals: diag?.custom_peripherals ?? [],
           ip_address: diag?.ip_address ?? null,
           mac_address: diag?.mac_address ?? null,
           chip_id: diag?.chip_id ?? null,
@@ -97,6 +98,7 @@ export class DeviceController {
           ...device,
           sensor_health: diag?.sensor_health ?? null,
           door_open: diag?.door_open ?? null,
+          custom_peripherals: diag?.custom_peripherals ?? [],
           ip_address: diag?.ip_address ?? null,
           mac_address: diag?.mac_address ?? null,
           chip_id: diag?.chip_id ?? null,
@@ -510,6 +512,28 @@ export class DeviceController {
       const id = req.params.id as string;
       const configPayload = req.body;
 
+      // Chỉ Chủ kho (ADMIN) mới được thêm, xóa hoặc bật/tắt thiết bị ngoại vi & GPIO
+      const isModifyingPeripherals =
+        configPayload.peripherals !== undefined ||
+        configPayload.custom_peripherals !== undefined;
+      if (isModifyingPeripherals && req.user!.role !== Role.ADMIN) {
+        await AuditService.log({
+          actor_id: req.user!.id,
+          action: 'SECURITY_VIOLATION_403',
+          target_type: 'DEVICE',
+          target_id: id,
+          details_json: {
+            reason: 'Non-ADMIN attempted to modify hardware peripherals/GPIO config',
+            role: req.user!.role,
+          },
+        });
+        res.status(403).json({
+          success: false,
+          message: 'Chỉ Chủ kho (Admin) mới có quyền thêm, xóa hoặc cấu hình thiết bị ngoại vi (403 Forbidden)',
+        });
+        return;
+      }
+
       const device = await prisma.device.findFirst({
         where: { OR: [{ id }, { device_code: id }] },
       });
@@ -518,7 +542,63 @@ export class DeviceController {
         return;
       }
 
-      // Lưu cấu hình vào DB (gộp cả peripherals nếu có)
+      // Validate & chuẩn hóa danh sách ngoại vi tùy chọn (nếu có)
+      const SAFE_ESP32_GPIOS = new Set([4, 5, 13, 14, 16, 17, 18, 19, 23, 25, 26, 27, 32, 33, 34, 35, 36, 39]);
+      const VALID_TYPES = new Set(['RELAY_OUTPUT', 'DIGITAL_INPUT', 'ANALOG_INPUT']);
+      let sanitizedCustomPeripherals: any[] | undefined = undefined;
+
+      if (configPayload.custom_peripherals !== undefined) {
+        if (!Array.isArray(configPayload.custom_peripherals)) {
+          res.status(400).json({ success: false, message: 'custom_peripherals phải là mảng' });
+          return;
+        }
+        if (configPayload.custom_peripherals.length > 8) {
+          res.status(400).json({ success: false, message: 'Tối đa 8 ngoại vi tùy chỉnh trên mỗi node' });
+          return;
+        }
+        const usedGpios = new Set<number>();
+        sanitizedCustomPeripherals = [];
+        for (const item of configPayload.custom_peripherals) {
+          const itemId = typeof item?.id === 'string' ? item.id.trim().slice(0, 32) : '';
+          const itemName = typeof item?.name === 'string' ? item.name.trim().slice(0, 48) : '';
+          const itemType = String(item?.type || '');
+          const gpio = Number(item?.gpio);
+
+          if (!itemId || !itemName || !VALID_TYPES.has(itemType) || !SAFE_ESP32_GPIOS.has(gpio)) {
+            res.status(400).json({
+              success: false,
+              message: `Thông tin ngoại vi không hợp lệ hoặc chân GPIO ${gpio} không được hỗ trợ`,
+            });
+            return;
+          }
+          if (itemType === 'RELAY_OUTPUT' && gpio >= 34) {
+            res.status(400).json({
+              success: false,
+              message: `Chân GPIO ${gpio} chỉ nhận tín hiệu vào (Input-only), không thể dùng làm Relay ngõ ra`,
+            });
+            return;
+          }
+          if (usedGpios.has(gpio)) {
+            res.status(400).json({
+              success: false,
+              message: `Chân GPIO ${gpio} bị trùng lặp giữa các ngoại vi`,
+            });
+            return;
+          }
+          usedGpios.add(gpio);
+          sanitizedCustomPeripherals.push({
+            id: itemId,
+            name: itemName,
+            type: itemType,
+            gpio,
+            active_high: item?.active_high !== false,
+            pull_up: item?.pull_up !== false,
+            unit: typeof item?.unit === 'string' ? item.unit.trim().slice(0, 12) : '',
+          });
+        }
+      }
+
+      // Lưu cấu hình vào DB (gộp cả peripherals & custom_peripherals nếu có)
       const prevConfig =
         typeof device.config_json === 'object' && device.config_json !== null
           ? (device.config_json as Record<string, any>)
@@ -534,6 +614,12 @@ export class DeviceController {
             ? configPayload.peripherals
             : {}),
         },
+        custom_peripherals:
+          sanitizedCustomPeripherals !== undefined
+            ? sanitizedCustomPeripherals
+            : Array.isArray(prevConfig.custom_peripherals)
+            ? prevConfig.custom_peripherals
+            : [],
       };
 
       await prisma.device.update({
@@ -574,7 +660,7 @@ export class DeviceController {
   static async controlActuator(req: Request, res: Response): Promise<void> {
     try {
       const id = req.params.id as string;
-      const { target, action, control_mode, duration_sec, command } = req.body;
+      const { target, action, control_mode, duration_sec, command, peripheral_id } = req.body;
 
       // Hỗ trợ cả 2 dạng body: { target, action } hoặc { command: "TURN_ON_FAN" }
       let resolvedTarget = target || 'VENTILATION_FAN';
@@ -610,6 +696,10 @@ export class DeviceController {
       }
 
       const periph = (device.config_json as any)?.peripherals || {};
+      const customPeripherals: any[] = Array.isArray((device.config_json as any)?.custom_peripherals)
+        ? (device.config_json as any).custom_peripherals
+        : [];
+
       if (resolvedTarget === 'VENTILATION_FAN' && periph.fan_enabled === false && resolvedAction === 'TURN_ON') {
         res.status(400).json({
           success: false,
@@ -624,9 +714,20 @@ export class DeviceController {
         });
         return;
       }
+      if (resolvedTarget === 'CUSTOM_PERIPHERAL') {
+        const matched = customPeripherals.find((cp) => cp.id === peripheral_id && cp.type === 'RELAY_OUTPUT');
+        if (!matched) {
+          res.status(400).json({
+            success: false,
+            message: 'Không tìm thấy thiết bị ngoại vi bật/tắt phù hợp trong cấu hình node.',
+          });
+          return;
+        }
+      }
 
       const resolvedControlMode =
-        control_mode || (resolvedTarget === 'ALARM_BUZZER' ? undefined : 'MANUAL');
+        control_mode ||
+        (resolvedTarget === 'ALARM_BUZZER' || resolvedTarget === 'CUSTOM_PERIPHERAL' ? undefined : 'MANUAL');
 
       // Phát lệnh xuống topic grain/devices/{device_code}/cmd
       const cmdId = await MQTTService.publishCommand(
@@ -636,6 +737,7 @@ export class DeviceController {
         {
           target: resolvedTarget,
           action: resolvedAction, // TURN_ON hoặc TURN_OFF
+          ...(resolvedTarget === 'CUSTOM_PERIPHERAL' ? { peripheral_id } : {}),
           ...(resolvedControlMode ? { control_mode: resolvedControlMode } : {}),
           duration_sec: duration_sec || 600,
         },

@@ -11,7 +11,8 @@ router.use(authenticateJWT, requireRoles(Role.ADMIN));
 
 router.get('/', UserController.getAll);
 router.post('/', UserController.create);
+router.put('/:id', UserController.update);
 router.put('/:id/status', UserController.updateStatus);
+router.delete('/:id', UserController.remove);
 
 export default router;
-

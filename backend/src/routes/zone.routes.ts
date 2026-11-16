@@ -11,7 +11,7 @@ router.use(authenticateJWT);
 router.get('/', ZoneController.getAll);
 router.get('/:id', ZoneController.getById);
 router.post('/', requireRoles(Role.ADMIN), ZoneController.create);
-router.put('/:id', requireRoles(Role.ADMIN, Role.OPERATOR), ZoneController.update);
+router.put('/:id', requireRoles(Role.ADMIN), ZoneController.update);
+router.delete('/:id', requireRoles(Role.ADMIN), ZoneController.remove);
 
 export default router;
-

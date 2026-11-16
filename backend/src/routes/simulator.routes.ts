@@ -1,11 +1,15 @@
 import { Router } from 'express';
 import { SimulatorController } from '../controllers/simulator.controller';
+import { authenticateJWT } from '../middleware/auth.middleware';
+import { requireRoles } from '../middleware/rbac.middleware';
+import { Role } from '@prisma/client';
 
 const router = Router();
 
-// Không bắt buộc đăng nhập để Simulator Drawer trên Web Demo có thể gọi dễ dàng
+router.use(authenticateJWT);
+
 router.get('/status', SimulatorController.getStatus);
-router.post('/scenario', SimulatorController.setScenario);
-router.post('/reconnect', SimulatorController.reconnect);
+router.post('/scenario', requireRoles(Role.ADMIN, Role.OPERATOR), SimulatorController.setScenario);
+router.post('/reconnect', requireRoles(Role.ADMIN, Role.OPERATOR), SimulatorController.reconnect);
 
 export default router;

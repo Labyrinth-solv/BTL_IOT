@@ -13,14 +13,15 @@ export class AuthController {
   static async login(req: Request, res: Response): Promise<void> {
     try {
       const { email, password } = req.body;
+      const loginId = typeof email === 'string' ? email.trim() : '';
 
-      if (!email || !password) {
-        res.status(400).json({ success: false, message: 'Vui lòng cung cấp email và mật khẩu' });
+      if (!loginId || !password) {
+        res.status(400).json({ success: false, message: 'Vui lòng nhập tên đăng nhập và mật khẩu' });
         return;
       }
 
-      const user = await prisma.user.findUnique({
-        where: { email },
+      const user = await prisma.user.findFirst({
+        where: { email: { equals: loginId, mode: 'insensitive' } },
         include: {
           managed_zones: {
             select: { id: true, name: true, grain_type: true },
@@ -29,7 +30,7 @@ export class AuthController {
       });
 
       if (!user) {
-        res.status(401).json({ success: false, message: 'Email hoặc mật khẩu không chính xác' });
+        res.status(401).json({ success: false, message: 'Tên đăng nhập hoặc mật khẩu không chính xác' });
         return;
       }
 
@@ -40,7 +41,7 @@ export class AuthController {
 
       const isPasswordValid = await bcrypt.compare(password, user.password_hash);
       if (!isPasswordValid) {
-        res.status(401).json({ success: false, message: 'Email hoặc mật khẩu không chính xác' });
+        res.status(401).json({ success: false, message: 'Tên đăng nhập hoặc mật khẩu không chính xác' });
         return;
       }
 
@@ -105,6 +106,11 @@ export class AuthController {
 
       if (!user) {
         res.status(404).json({ success: false, message: 'Không tìm thấy người dùng' });
+        return;
+      }
+
+      if (user.status === UserStatus.LOCKED) {
+        res.status(403).json({ success: false, message: 'Tài khoản của bạn đã bị khóa' });
         return;
       }
 

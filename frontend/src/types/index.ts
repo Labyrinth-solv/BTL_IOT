@@ -90,6 +90,28 @@ export interface PeripheralConfig {
   buzzer_auto?: boolean;
 }
 
+export type CustomPeripheralType = 'RELAY_OUTPUT' | 'DIGITAL_INPUT' | 'ANALOG_INPUT';
+
+export interface CustomPeripheralConfig {
+  id: string;
+  name: string;
+  type: CustomPeripheralType;
+  gpio: number;
+  active_high?: boolean;
+  pull_up?: boolean;
+  unit?: string;
+}
+
+export interface CustomPeripheralRuntimeState {
+  id: string;
+  type: CustomPeripheralType;
+  gpio: number;
+  state?: string;
+  value?: number;
+  raw_adc?: number;
+  raw_logic?: number;
+}
+
 export interface SensorHealth {
   aht20?: Aht20Health;
   mq135?: Mq135Health;
@@ -113,6 +135,7 @@ export interface Device {
   telemetry_logs?: TelemetryLog[];
   sensor_health?: SensorHealth | null;
   door_open?: boolean | null;
+  custom_peripherals?: CustomPeripheralRuntimeState[];
   ip_address?: string | null;
   mac_address?: string | null;
   chip_id?: string | null;
