@@ -150,6 +150,8 @@ export class DeviceController {
             temp_crit_threshold: 28.0,
             hum_warn_threshold: 65.0,
             hum_crit_threshold: 70.0,
+            emc_warn_threshold: 14.0,
+            emc_crit_threshold: 14.8,
             gas_warn_threshold: 600.0,
             gas_crit_threshold: 700.0,
           },
@@ -542,23 +544,104 @@ export class DeviceController {
         return;
       }
 
-      // Validate & chuẩn hóa danh sách ngoại vi tùy chọn (nếu có)
+      // Validate & chuẩn hóa chân GPIO của các thiết bị chuẩn + ngoại vi tùy chọn
       const SAFE_ESP32_GPIOS = new Set([4, 5, 13, 14, 16, 17, 18, 19, 23, 25, 26, 27, 32, 33, 34, 35, 36, 39]);
+      const SAFE_I2C_GPIOS = new Set([21, 22, ...SAFE_ESP32_GPIOS]);
+      const SAFE_ADC1_GPIOS = new Set([32, 33, 34, 35, 36, 39]);
       const VALID_TYPES = new Set(['RELAY_OUTPUT', 'DIGITAL_INPUT', 'ANALOG_INPUT']);
-      let sanitizedCustomPeripherals: any[] | undefined = undefined;
 
-      if (configPayload.custom_peripherals !== undefined) {
-        if (!Array.isArray(configPayload.custom_peripherals)) {
-          res.status(400).json({ success: false, message: 'custom_peripherals phải là mảng' });
+      const prevConfig =
+        typeof device.config_json === 'object' && device.config_json !== null
+          ? (device.config_json as Record<string, any>)
+          : {};
+      const mergedPeripherals: Record<string, any> = {
+        ...(typeof prevConfig.peripherals === 'object' && prevConfig.peripherals !== null
+          ? prevConfig.peripherals
+          : {}),
+        ...(typeof configPayload.peripherals === 'object' && configPayload.peripherals !== null
+          ? configPayload.peripherals
+          : {}),
+      };
+
+      const usedGpios = new Set<number>();
+      const pinChecks: { enabled: boolean; gpio: number; allowed: Set<number>; label: string; outputOnlyCheck?: boolean }[] = [
+        {
+          enabled: mergedPeripherals.aht20_enabled !== false,
+          gpio: Number(mergedPeripherals.aht20_sda_gpio ?? 21),
+          allowed: SAFE_I2C_GPIOS,
+          label: 'AHT20 SDA',
+        },
+        {
+          enabled: mergedPeripherals.aht20_enabled !== false,
+          gpio: Number(mergedPeripherals.aht20_scl_gpio ?? 22),
+          allowed: SAFE_I2C_GPIOS,
+          label: 'AHT20 SCL',
+        },
+        {
+          enabled: mergedPeripherals.mq135_enabled !== false,
+          gpio: Number(mergedPeripherals.mq135_gpio ?? 34),
+          allowed: SAFE_ADC1_GPIOS,
+          label: 'MQ-135',
+        },
+        {
+          enabled: mergedPeripherals.door_enabled !== false,
+          gpio: Number(mergedPeripherals.door_gpio ?? 27),
+          allowed: SAFE_ESP32_GPIOS,
+          label: 'Cảm biến cửa',
+        },
+        {
+          enabled: mergedPeripherals.fan_enabled !== false,
+          gpio: Number(mergedPeripherals.fan_gpio ?? 25),
+          allowed: SAFE_ESP32_GPIOS,
+          label: 'Quạt thông gió',
+          outputOnlyCheck: true,
+        },
+        {
+          enabled: mergedPeripherals.buzzer_enabled !== false,
+          gpio: Number(mergedPeripherals.buzzer_gpio ?? 33),
+          allowed: SAFE_ESP32_GPIOS,
+          label: 'Còi báo động',
+          outputOnlyCheck: true,
+        },
+      ];
+
+      for (const check of pinChecks) {
+        if (!check.enabled) continue;
+        if (!check.allowed.has(check.gpio) || (check.outputOnlyCheck && check.gpio >= 34)) {
+          res.status(400).json({
+            success: false,
+            message: `Chân GPIO ${check.gpio} không hợp lệ cho ${check.label}`,
+          });
           return;
         }
-        if (configPayload.custom_peripherals.length > 8) {
+        if (usedGpios.has(check.gpio)) {
+          res.status(400).json({
+            success: false,
+            message: `Chân GPIO ${check.gpio} bị trùng lặp giữa các thiết bị`,
+          });
+          return;
+        }
+        usedGpios.add(check.gpio);
+      }
+
+      let sanitizedCustomPeripherals: any[] | undefined = undefined;
+      const customListToValidate =
+        configPayload.custom_peripherals !== undefined
+          ? configPayload.custom_peripherals
+          : prevConfig.custom_peripherals;
+
+      if (configPayload.custom_peripherals !== undefined && !Array.isArray(configPayload.custom_peripherals)) {
+        res.status(400).json({ success: false, message: 'custom_peripherals phải là mảng' });
+        return;
+      }
+
+      if (Array.isArray(customListToValidate)) {
+        if (customListToValidate.length > 8) {
           res.status(400).json({ success: false, message: 'Tối đa 8 ngoại vi tùy chỉnh trên mỗi node' });
           return;
         }
-        const usedGpios = new Set<number>();
-        sanitizedCustomPeripherals = [];
-        for (const item of configPayload.custom_peripherals) {
+        const validatedList: any[] = [];
+        for (const item of customListToValidate) {
           const itemId = typeof item?.id === 'string' ? item.id.trim().slice(0, 32) : '';
           const itemName = typeof item?.name === 'string' ? item.name.trim().slice(0, 48) : '';
           const itemType = String(item?.type || '');
@@ -581,12 +664,12 @@ export class DeviceController {
           if (usedGpios.has(gpio)) {
             res.status(400).json({
               success: false,
-              message: `Chân GPIO ${gpio} bị trùng lặp giữa các ngoại vi`,
+              message: `Chân GPIO ${gpio} đang được thiết bị khác sử dụng`,
             });
             return;
           }
           usedGpios.add(gpio);
-          sanitizedCustomPeripherals.push({
+          validatedList.push({
             id: itemId,
             name: itemName,
             type: itemType,
@@ -596,24 +679,16 @@ export class DeviceController {
             unit: typeof item?.unit === 'string' ? item.unit.trim().slice(0, 12) : '',
           });
         }
+        if (configPayload.custom_peripherals !== undefined) {
+          sanitizedCustomPeripherals = validatedList;
+        }
       }
 
-      // Lưu cấu hình vào DB (gộp cả peripherals & custom_peripherals nếu có)
-      const prevConfig =
-        typeof device.config_json === 'object' && device.config_json !== null
-          ? (device.config_json as Record<string, any>)
-          : {};
+      // Lưu cấu hình vào DB
       const updatedConfig: Record<string, any> = {
         ...prevConfig,
         ...configPayload,
-        peripherals: {
-          ...(typeof prevConfig.peripherals === 'object' && prevConfig.peripherals !== null
-            ? prevConfig.peripherals
-            : {}),
-          ...(typeof configPayload.peripherals === 'object' && configPayload.peripherals !== null
-            ? configPayload.peripherals
-            : {}),
-        },
+        peripherals: mergedPeripherals,
         custom_peripherals:
           sanitizedCustomPeripherals !== undefined
             ? sanitizedCustomPeripherals

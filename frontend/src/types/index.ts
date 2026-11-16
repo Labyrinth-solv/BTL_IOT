@@ -82,11 +82,17 @@ export interface DoorSensorHealth {
 
 export interface PeripheralConfig {
   aht20_enabled?: boolean;
+  aht20_sda_gpio?: number;
+  aht20_scl_gpio?: number;
   mq135_enabled?: boolean;
+  mq135_gpio?: number;
   door_enabled?: boolean;
+  door_gpio?: number;
   fan_enabled?: boolean;
+  fan_gpio?: number;
   fan_auto?: boolean;
   buzzer_enabled?: boolean;
+  buzzer_gpio?: number;
   buzzer_auto?: boolean;
 }
 

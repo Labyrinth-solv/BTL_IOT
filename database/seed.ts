@@ -130,20 +130,26 @@ async function main() {
    - Viewer  : viewer / viewer123 (hoặc ${viewerUser.email})`);
 
   // ---------------------------------------------------------------------------
-  // 2. TẠO 2 KHU VỰC KHO THÓC TẺ THEO TIÊU CHUẨN TCVN 8370:2018
+  // 2. TẠO 2 KHU VỰC KHO THÓC TẺ
   // ---------------------------------------------------------------------------
-  console.log('🏭 Đang tạo 2 khu vực kho theo tiêu chuẩn TCVN 8370:2018...');
+  console.log('🏭 Đang tạo 2 khu vực kho...');
 
   // Kho Silo A1
   const existingZoneA1 = await prisma.warehouseZone.findFirst({
-    where: { name: 'Kho Silo Thóc Tẻ A1 - TCVN 8370:2018' },
+    where: {
+      OR: [
+        { name: 'Kho Silo Thóc Tẻ A1' },
+        { name: 'Kho Silo Thóc Tẻ A1 - TCVN 8370:2018' },
+      ],
+    },
   });
 
   const zoneA1 = existingZoneA1
     ? await prisma.warehouseZone.update({
         where: { id: existingZoneA1.id },
         data: {
-          grain_type: 'Thóc tẻ - TCVN 8370',
+          name: 'Kho Silo Thóc Tẻ A1',
+          grain_type: 'Thóc tẻ',
           target_mc: 14.0, // Độ ẩm hạt tối đa an toàn 14.0%
           max_rh: 65.0,    // Độ ẩm không khí giới hạn 65.0%
           manager_id: operatorUser.id,
@@ -151,8 +157,8 @@ async function main() {
       })
     : await prisma.warehouseZone.create({
         data: {
-          name: 'Kho Silo Thóc Tẻ A1 - TCVN 8370:2018',
-          grain_type: 'Thóc tẻ - TCVN 8370',
+          name: 'Kho Silo Thóc Tẻ A1',
+          grain_type: 'Thóc tẻ',
           target_mc: 14.0,
           max_rh: 65.0,
           manager_id: operatorUser.id,
@@ -161,14 +167,20 @@ async function main() {
 
   // Kho Silo B2
   const existingZoneB2 = await prisma.warehouseZone.findFirst({
-    where: { name: 'Kho Silo Thóc Tẻ B2 - TCVN 8370:2018' },
+    where: {
+      OR: [
+        { name: 'Kho Silo Thóc Tẻ B2' },
+        { name: 'Kho Silo Thóc Tẻ B2 - TCVN 8370:2018' },
+      ],
+    },
   });
 
   const zoneB2 = existingZoneB2
     ? await prisma.warehouseZone.update({
         where: { id: existingZoneB2.id },
         data: {
-          grain_type: 'Thóc tẻ - TCVN 8370',
+          name: 'Kho Silo Thóc Tẻ B2',
+          grain_type: 'Thóc tẻ',
           target_mc: 14.0,
           max_rh: 65.0,
           manager_id: operatorUser.id,
@@ -176,8 +188,8 @@ async function main() {
       })
     : await prisma.warehouseZone.create({
         data: {
-          name: 'Kho Silo Thóc Tẻ B2 - TCVN 8370:2018',
-          grain_type: 'Thóc tẻ - TCVN 8370',
+          name: 'Kho Silo Thóc Tẻ B2',
+          grain_type: 'Thóc tẻ',
           target_mc: 14.0,
           max_rh: 65.0,
           manager_id: operatorUser.id,

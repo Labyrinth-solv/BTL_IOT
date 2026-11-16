@@ -361,6 +361,10 @@ export const DashboardPage: React.FC = () => {
                 typeof cfg.hum_warn_threshold === 'number' ? cfg.hum_warn_threshold : 65.0;
               const humCritThreshold =
                 typeof cfg.hum_crit_threshold === 'number' ? cfg.hum_crit_threshold : 70.0;
+              const emcWarnThreshold =
+                typeof cfg.emc_warn_threshold === 'number' ? cfg.emc_warn_threshold : 14.0;
+              const emcCritThreshold =
+                typeof cfg.emc_crit_threshold === 'number' ? cfg.emc_crit_threshold : 14.8;
               const gasWarnThreshold =
                 typeof cfg.gas_warn_threshold === 'number' ? cfg.gas_warn_threshold : 600;
               const gasCritThreshold =
@@ -374,8 +378,10 @@ export const DashboardPage: React.FC = () => {
                 isOnline && hasTelemetry && ahtEnabled && aht20Ok && rh !== null && rh >= humCritThreshold;
               const isRhWarn =
                 isOnline && hasTelemetry && ahtEnabled && aht20Ok && rh !== null && rh >= humWarnThreshold;
-              const isEmcCrit = isOnline && hasTelemetry && ahtEnabled && aht20Ok && emc !== null && emc >= 14.8;
-              const isEmcWarn = isOnline && hasTelemetry && ahtEnabled && aht20Ok && emc !== null && emc >= 14.0;
+              const isEmcCrit =
+                isOnline && hasTelemetry && ahtEnabled && aht20Ok && emc !== null && emc >= emcCritThreshold;
+              const isEmcWarn =
+                isOnline && hasTelemetry && ahtEnabled && aht20Ok && emc !== null && emc >= emcWarnThreshold;
               const isGasCrit =
                 isOnline && hasTelemetry && mqEnabled && mq135Ok && gas !== null && gas >= gasCritThreshold;
               const isGasWarn =
@@ -603,6 +609,11 @@ export const DashboardPage: React.FC = () => {
                                   <Wind className="w-3.5 h-3.5 text-emerald-600" />
                                   Ẩm hạt
                                 </span>
+                                {aht20Ok && (
+                                  <span className="text-[11px] font-medium text-slate-400">
+                                    Báo: &ge;{emcWarnThreshold}%
+                                  </span>
+                                )}
                               </div>
                               <div
                                 className={`text-2xl font-bold mt-1.5 ${
@@ -616,8 +627,14 @@ export const DashboardPage: React.FC = () => {
                                 {aht20Ok && emc !== null ? `${emc}%` : '--'}
                               </div>
                               {(isEmcCrit || isEmcWarn) && (
-                                <div className="text-[11px] mt-1 font-medium text-rose-600">
-                                  {isEmcCrit ? 'Vượt chuẩn' : 'Gần ngưỡng'}
+                                <div
+                                  className={`text-[11px] mt-1 font-semibold ${
+                                    isEmcCrit ? 'text-rose-700' : 'text-amber-700'
+                                  }`}
+                                >
+                                  {isEmcCrit
+                                    ? `Đạt ngưỡng nguy hiểm (≥${emcCritThreshold}%)`
+                                    : `Đạt ngưỡng cảnh báo (≥${emcWarnThreshold}%)`}
                                 </div>
                               )}
                             </div>

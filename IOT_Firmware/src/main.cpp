@@ -24,6 +24,13 @@ bool cfgFanEnabled    = true;
 bool cfgBuzzerEnabled = true;
 bool cfgBuzzerAuto    = true;
 
+uint8_t cfgPinSda    = PIN_I2C_SDA;
+uint8_t cfgPinScl    = PIN_I2C_SCL;
+uint8_t cfgPinMq135  = PIN_MQ135_ANALOG;
+uint8_t cfgPinDoor   = PIN_DOOR_SENSOR;
+uint8_t cfgPinFan    = PIN_RELAY_FAN;
+uint8_t cfgPinBuzzer = PIN_RELAY_BUZZER;
+
 float cfgTempWarn = THRESHOLD_TEMP_WARN;
 float cfgTempCrit = THRESHOLD_TEMP_CRIT;
 float cfgHumWarn  = THRESHOLD_HUM_WARN;
@@ -102,6 +109,12 @@ bool isSafeCustomGpio(uint8_t gpio, const String& type) {
   if (!found) return false;
   if (type == "RELAY_OUTPUT" && gpio >= 34) return false; // GPIO 34-39 la chan Input-only
   return true;
+}
+
+bool isSafeBuiltinGpio(uint8_t gpio, bool allowInputOnly, bool allowI2C) {
+  if (allowI2C && (gpio == 21 || gpio == 22)) return true;
+  if (allowInputOnly) return isSafeCustomGpio(gpio, "DIGITAL_INPUT");
+  return isSafeCustomGpio(gpio, "RELAY_OUTPUT");
 }
 
 void writeCustomRelayPin(const CustomPeripheral& cp) {
@@ -233,6 +246,19 @@ void loadConfigFromNVS() {
   cfgBuzzerAuto    = preferences.getBool("auto_buz", true);
   controlMode      = preferences.getBool("auto_fan", true) ? "AUTO" : "MANUAL";
 
+  uint8_t nSda = preferences.getUChar("pin_sda", PIN_I2C_SDA);
+  uint8_t nScl = preferences.getUChar("pin_scl", PIN_I2C_SCL);
+  uint8_t nMq  = preferences.getUChar("pin_mq", PIN_MQ135_ANALOG);
+  uint8_t nDr  = preferences.getUChar("pin_door", PIN_DOOR_SENSOR);
+  uint8_t nFan = preferences.getUChar("pin_fan", PIN_RELAY_FAN);
+  uint8_t nBuz = preferences.getUChar("pin_buz", PIN_RELAY_BUZZER);
+  cfgPinSda    = isSafeBuiltinGpio(nSda, false, true) ? nSda : PIN_I2C_SDA;
+  cfgPinScl    = isSafeBuiltinGpio(nScl, false, true) ? nScl : PIN_I2C_SCL;
+  cfgPinMq135  = isSafeBuiltinGpio(nMq, true, false) ? nMq : PIN_MQ135_ANALOG;
+  cfgPinDoor   = isSafeBuiltinGpio(nDr, true, false) ? nDr : PIN_DOOR_SENSOR;
+  cfgPinFan    = isSafeBuiltinGpio(nFan, false, false) ? nFan : PIN_RELAY_FAN;
+  cfgPinBuzzer = isSafeBuiltinGpio(nBuz, false, false) ? nBuz : PIN_RELAY_BUZZER;
+
   cfgTempWarn = preferences.getFloat("t_warn", THRESHOLD_TEMP_WARN);
   cfgTempCrit = preferences.getFloat("t_crit", THRESHOLD_TEMP_CRIT);
   cfgHumWarn  = preferences.getFloat("h_warn", THRESHOLD_HUM_WARN);
@@ -266,6 +292,12 @@ void saveConfigToNVS() {
   preferences.putBool("en_buz", cfgBuzzerEnabled);
   preferences.putBool("auto_buz", cfgBuzzerAuto);
   preferences.putBool("auto_fan", controlMode == "AUTO");
+  preferences.putUChar("pin_sda", cfgPinSda);
+  preferences.putUChar("pin_scl", cfgPinScl);
+  preferences.putUChar("pin_mq", cfgPinMq135);
+  preferences.putUChar("pin_door", cfgPinDoor);
+  preferences.putUChar("pin_fan", cfgPinFan);
+  preferences.putUChar("pin_buz", cfgPinBuzzer);
 
   preferences.putFloat("t_warn", cfgTempWarn);
   preferences.putFloat("t_crit", cfgTempCrit);
@@ -302,12 +334,12 @@ static void setRelayPin(uint8_t pin, bool enable) {
 
 void setFanRelay(bool enable) {
   fanState = enable;
-  setRelayPin(PIN_RELAY_FAN, enable);
+  setRelayPin(cfgPinFan, enable);
 }
 
 void setBuzzerRelay(bool enable) {
   buzzerState = enable;
-  setRelayPin(PIN_RELAY_BUZZER, enable);
+  setRelayPin(cfgPinBuzzer, enable);
 }
 
 // =============================================================================
@@ -341,23 +373,23 @@ String scanI2CBusSummary() {
 }
 
 String diagnoseAht20I2CBus(uint8_t probeErr) {
-  // Tam dung I2C de kiem tra muc logic tinh tren chan vat ly SDA (21) & SCL (22)
+  // Tam dung I2C de kiem tra muc logic tinh tren chan vat ly SDA & SCL
   Wire.end();
 
-  pinMode(PIN_I2C_SDA, INPUT);
-  pinMode(PIN_I2C_SCL, INPUT);
+  pinMode(cfgPinSda, INPUT);
+  pinMode(cfgPinScl, INPUT);
   delayMicroseconds(50);
-  int sdaNoPull = digitalRead(PIN_I2C_SDA);
-  int sclNoPull = digitalRead(PIN_I2C_SCL);
+  int sdaNoPull = digitalRead(cfgPinSda);
+  int sclNoPull = digitalRead(cfgPinScl);
 
-  pinMode(PIN_I2C_SDA, INPUT_PULLUP);
-  pinMode(PIN_I2C_SCL, INPUT_PULLUP);
+  pinMode(cfgPinSda, INPUT_PULLUP);
+  pinMode(cfgPinScl, INPUT_PULLUP);
   delayMicroseconds(50);
-  int sdaPull = digitalRead(PIN_I2C_SDA);
-  int sclPull = digitalRead(PIN_I2C_SCL);
+  int sdaPull = digitalRead(cfgPinSda);
+  int sclPull = digitalRead(cfgPinScl);
 
   // Khoi phuc lai I2C o 100kHz va timeout 50ms
-  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+  Wire.begin(cfgPinSda, cfgPinScl);
   Wire.setClock(100000);
   Wire.setTimeOut(50);
 
@@ -500,7 +532,7 @@ void readSensors() {
   } else {
     long adcSum = 0;
     for (int i = 0; i < 8; i++) {
-      adcSum += analogRead(PIN_MQ135_ANALOG);
+      adcSum += analogRead(cfgPinMq135);
       delayMicroseconds(200);
     }
     int rawADC = (int)(adcSum / 8);
@@ -509,7 +541,7 @@ void readSensors() {
     if (rawADC >= MQ135_ADC_MIN_VALID && rawADC <= MQ135_ADC_MAX_VALID) {
       mq135Connected = true;
       mq135Status = "OK";
-      mq135Message = "Tin hieu ADC on dinh tren GPIO 34";
+      mq135Message = "Tin hieu ADC on dinh tren GPIO " + String(cfgPinMq135);
       int clampedADC = constrain(rawADC, MQ135_ADC_MIN_VALID, MQ135_ADC_MAX);
       currentGasPPM = map(clampedADC, MQ135_ADC_MIN_VALID, MQ135_ADC_MAX, 300, 1200);
     } else if (rawADC > MQ135_ADC_MAX_VALID) {
@@ -525,12 +557,12 @@ void readSensors() {
     }
   }
 
-  // 3. Đọc Cảm biến từ cửa kho (Digital D0 - GPIO 27)
+  // 3. Đọc Cảm biến từ cửa kho (Digital D0)
   if (!cfgDoorEnabled) {
     lastDoorRawLogic = LOW;
     isDoorOpen = false;
   } else {
-    lastDoorRawLogic = digitalRead(PIN_DOOR_SENSOR);
+    lastDoorRawLogic = digitalRead(cfgPinDoor);
     isDoorOpen = (lastDoorRawLogic == DOOR_STATE_OPEN_LOGIC);
   }
 
@@ -682,7 +714,7 @@ void sendTelemetry() {
   hAht["enabled"] = cfgAht20Enabled;
   hAht["ok"]      = ahtOk;
   hAht["status"]  = aht20Status;
-  hAht["pin"]     = "I2C 0x38 (SDA21/SCL22)";
+  hAht["pin"]     = "I2C 0x38 (SDA" + String(cfgPinSda) + "/SCL" + String(cfgPinScl) + ")";
   hAht["message"] = aht20Message;
 
   JsonObject hMq = health["mq135"].to<JsonObject>();
@@ -690,7 +722,7 @@ void sendTelemetry() {
   hMq["ok"]      = mqOk;
   hMq["status"]  = mq135Status;
   hMq["raw_adc"] = lastMq135RawAdc;
-  hMq["pin"]     = "GPIO34";
+  hMq["pin"]     = "GPIO" + String(cfgPinMq135);
   hMq["message"] = mq135Message;
 
   JsonObject hDoor = health["door_sensor"].to<JsonObject>();
@@ -698,9 +730,9 @@ void sendTelemetry() {
   hDoor["ok"]        = cfgDoorEnabled;
   hDoor["status"]    = cfgDoorEnabled ? "DIGITAL_INPUT" : "DISABLED";
   hDoor["raw_logic"] = lastDoorRawLogic;
-  hDoor["pin"]       = "GPIO27";
+  hDoor["pin"]       = "GPIO" + String(cfgPinDoor);
   hDoor["message"]   = cfgDoorEnabled
-                         ? "Digital 1-bit GPIO27 (khong tu nhan dien rut day)"
+                         ? ("Digital 1-bit GPIO" + String(cfgPinDoor) + " (khong tu nhan dien rut day)")
                          : "Da vo hieu hoa theo doi cam bien cua tu Web";
 
   health["fault_count"] = faultCount;
@@ -785,10 +817,10 @@ void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
         }
         if (action && strcmp(action, "TURN_ON") == 0) {
           setFanRelay(true);
-          ackMessage = "Relay K1 GPIO " + String(PIN_RELAY_FAN) + " activated (Quat thong gio BAT)";
+          ackMessage = "Relay K1 GPIO " + String(cfgPinFan) + " activated (Quat thong gio BAT)";
         } else if (action && strcmp(action, "TURN_OFF") == 0) {
           setFanRelay(false);
-          ackMessage = "Relay K1 GPIO " + String(PIN_RELAY_FAN) + " deactivated (Quat thong gio TAT)";
+          ackMessage = "Relay K1 GPIO " + String(cfgPinFan) + " deactivated (Quat thong gio TAT)";
         }
       }
     }
@@ -802,11 +834,11 @@ void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
       } else if (action && strcmp(action, "TURN_ON") == 0) {
         buzzerManualOverride = true;
         setBuzzerRelay(true);
-        ackMessage = "Relay K2 GPIO " + String(PIN_RELAY_BUZZER) + " activated (Coi bao dong BAT)";
+        ackMessage = "Relay K2 GPIO " + String(cfgPinBuzzer) + " activated (Coi bao dong BAT)";
       } else if (action && strcmp(action, "TURN_OFF") == 0) {
         buzzerManualOverride = false;
         setBuzzerRelay(false);
-        ackMessage = "Relay K2 GPIO " + String(PIN_RELAY_BUZZER) + " deactivated (Coi bao dong TAT)";
+        ackMessage = "Relay K2 GPIO " + String(cfgPinBuzzer) + " deactivated (Coi bao dong TAT)";
       }
     }
     // 3. Điều khiển Ngoại vi tùy chọn (Relay ngõ ra thêm từ Web)
@@ -848,6 +880,58 @@ void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
 
     JsonObject periphObj = payloadObj["peripherals"];
     if (!periphObj.isNull()) {
+      uint8_t prevSda = cfgPinSda;
+      uint8_t prevScl = cfgPinScl;
+      uint8_t prevDoor = cfgPinDoor;
+      uint8_t prevFan = cfgPinFan;
+      uint8_t prevBuz = cfgPinBuzzer;
+
+      if (!periphObj["aht20_sda_gpio"].isNull()) {
+        uint8_t g = periphObj["aht20_sda_gpio"].as<uint8_t>();
+        if (isSafeBuiltinGpio(g, false, true)) cfgPinSda = g;
+      }
+      if (!periphObj["aht20_scl_gpio"].isNull()) {
+        uint8_t g = periphObj["aht20_scl_gpio"].as<uint8_t>();
+        if (isSafeBuiltinGpio(g, false, true)) cfgPinScl = g;
+      }
+      if (!periphObj["mq135_gpio"].isNull()) {
+        uint8_t g = periphObj["mq135_gpio"].as<uint8_t>();
+        if (isSafeBuiltinGpio(g, true, false)) cfgPinMq135 = g;
+      }
+      if (!periphObj["door_gpio"].isNull()) {
+        uint8_t g = periphObj["door_gpio"].as<uint8_t>();
+        if (isSafeBuiltinGpio(g, true, false)) cfgPinDoor = g;
+      }
+      if (!periphObj["fan_gpio"].isNull()) {
+        uint8_t g = periphObj["fan_gpio"].as<uint8_t>();
+        if (isSafeBuiltinGpio(g, false, false)) cfgPinFan = g;
+      }
+      if (!periphObj["buzzer_gpio"].isNull()) {
+        uint8_t g = periphObj["buzzer_gpio"].as<uint8_t>();
+        if (isSafeBuiltinGpio(g, false, false)) cfgPinBuzzer = g;
+      }
+
+      if (cfgPinSda != prevSda || cfgPinScl != prevScl) {
+        Wire.end();
+        Wire.begin(cfgPinSda, cfgPinScl);
+        Wire.setClock(100000);
+        Wire.setTimeOut(50);
+        hasRealAHT = false;
+      }
+      if (cfgPinDoor != prevDoor) {
+        pinMode(cfgPinDoor, DOOR_PIN_MODE);
+      }
+      if (cfgPinFan != prevFan) {
+        setRelayPin(prevFan, false);
+        pinMode(cfgPinFan, OUTPUT);
+        setFanRelay(fanState);
+      }
+      if (cfgPinBuzzer != prevBuz) {
+        setRelayPin(prevBuz, false);
+        pinMode(cfgPinBuzzer, OUTPUT);
+        setBuzzerRelay(buzzerState);
+      }
+
       if (!periphObj["aht20_enabled"].isNull())  cfgAht20Enabled  = periphObj["aht20_enabled"].as<bool>();
       if (!periphObj["mq135_enabled"].isNull())  cfgMq135Enabled  = periphObj["mq135_enabled"].as<bool>();
       if (!periphObj["door_enabled"].isNull())   cfgDoorEnabled   = periphObj["door_enabled"].as<bool>();
@@ -981,16 +1065,16 @@ void setup() {
   Serial.println("========================================================");
 
   // 1. Cấu hình chân Relay 2 kênh và Cảm biến từ cửa
-  pinMode(PIN_RELAY_FAN, OUTPUT);
-  pinMode(PIN_RELAY_BUZZER, OUTPUT);
-  pinMode(PIN_DOOR_SENSOR, DOOR_PIN_MODE);
+  pinMode(cfgPinFan, OUTPUT);
+  pinMode(cfgPinBuzzer, OUTPUT);
+  pinMode(cfgPinDoor, DOOR_PIN_MODE);
 
   // Trạng thái ban đầu: Tắt Quạt, Tắt Còi
   setFanRelay(false);
   setBuzzerRelay(false);
 
-  // 2. Khởi tạo Bus I2C (SDA=21, SCL=22, 100kHz, timeout 50ms)
-  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+  // 2. Khởi tạo Bus I2C (mặc định SDA=21, SCL=22, 100kHz, timeout 50ms)
+  Wire.begin(cfgPinSda, cfgPinScl);
   Wire.setClock(100000);
   Wire.setTimeOut(50);
 

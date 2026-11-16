@@ -68,25 +68,82 @@ export const PERIPHERAL_CATALOG: PeripheralDefinition[] = [
 
 export const DEFAULT_PERIPHERAL_CONFIG: Required<PeripheralConfig> = {
   aht20_enabled: true,
+  aht20_sda_gpio: 21,
+  aht20_scl_gpio: 22,
   mq135_enabled: true,
+  mq135_gpio: 34,
   door_enabled: true,
+  door_gpio: 27,
   fan_enabled: true,
+  fan_gpio: 25,
   fan_auto: true,
   buzzer_enabled: true,
+  buzzer_gpio: 33,
   buzzer_auto: true,
 };
 
 export function normalizePeripherals(raw?: Partial<PeripheralConfig> | null): Required<PeripheralConfig> {
   return {
     aht20_enabled: raw?.aht20_enabled !== false,
+    aht20_sda_gpio: typeof raw?.aht20_sda_gpio === 'number' ? raw.aht20_sda_gpio : 21,
+    aht20_scl_gpio: typeof raw?.aht20_scl_gpio === 'number' ? raw.aht20_scl_gpio : 22,
     mq135_enabled: raw?.mq135_enabled !== false,
+    mq135_gpio: typeof raw?.mq135_gpio === 'number' ? raw.mq135_gpio : 34,
     door_enabled: raw?.door_enabled !== false,
+    door_gpio: typeof raw?.door_gpio === 'number' ? raw.door_gpio : 27,
     fan_enabled: raw?.fan_enabled !== false,
+    fan_gpio: typeof raw?.fan_gpio === 'number' ? raw.fan_gpio : 25,
     fan_auto: raw?.fan_auto !== false,
     buzzer_enabled: raw?.buzzer_enabled !== false,
+    buzzer_gpio: typeof raw?.buzzer_gpio === 'number' ? raw.buzzer_gpio : 33,
     buzzer_auto: raw?.buzzer_auto !== false,
   };
 }
+
+export function getPeripheralPinLabel(id: PeripheralId, peripherals?: PeripheralConfig | null): string {
+  switch (id) {
+    case 'aht20':
+      return `GPIO ${peripherals?.aht20_sda_gpio ?? 21} / ${peripherals?.aht20_scl_gpio ?? 22} (I2C)`;
+    case 'mq135':
+      return `GPIO ${peripherals?.mq135_gpio ?? 34} (Analog)`;
+    case 'door':
+      return `GPIO ${peripherals?.door_gpio ?? 27}`;
+    case 'fan':
+      return `GPIO ${peripherals?.fan_gpio ?? 25}`;
+    case 'buzzer':
+      return `GPIO ${peripherals?.buzzer_gpio ?? 33}`;
+  }
+}
+
+export type CreatePeripheralKind =
+  | 'BUILTIN_AHT20'
+  | 'BUILTIN_MQ135'
+  | 'BUILTIN_DOOR'
+  | 'BUILTIN_FAN'
+  | 'BUILTIN_BUZZER'
+  | CustomPeripheralType;
+
+export interface I2cPinPairOption {
+  id: string;
+  sda: number;
+  scl: number;
+  label: string;
+}
+
+export const ESP32_I2C_PIN_PAIRS: I2cPinPairOption[] = [
+  {
+    id: '21-22',
+    sda: 21,
+    scl: 22,
+    label: 'GPIO 21 (SDA) / GPIO 22 (SCL) — Bus I2C mặc định (AHT20)',
+  },
+  {
+    id: '16-17',
+    sda: 16,
+    scl: 17,
+    label: 'GPIO 16 (SDA) / GPIO 17 (SCL) — Bus I2C dự phòng',
+  },
+];
 
 export interface SafeGpioOption {
   gpio: number;
@@ -122,24 +179,53 @@ export function getOccupiedGpios(
   customPeripherals: CustomPeripheralConfig[]
 ): Set<number> {
   const occupied = new Set<number>();
-  if (peripherals.fan_enabled !== false) occupied.add(25);
-  if (peripherals.buzzer_enabled !== false) occupied.add(33);
-  if (peripherals.door_enabled !== false) occupied.add(27);
-  if (peripherals.mq135_enabled !== false) occupied.add(34);
+  if (peripherals.aht20_enabled !== false) {
+    occupied.add(Number(peripherals.aht20_sda_gpio ?? 21));
+    occupied.add(Number(peripherals.aht20_scl_gpio ?? 22));
+  }
+  if (peripherals.fan_enabled !== false) occupied.add(Number(peripherals.fan_gpio ?? 25));
+  if (peripherals.buzzer_enabled !== false) occupied.add(Number(peripherals.buzzer_gpio ?? 33));
+  if (peripherals.door_enabled !== false) occupied.add(Number(peripherals.door_gpio ?? 27));
+  if (peripherals.mq135_enabled !== false) occupied.add(Number(peripherals.mq135_gpio ?? 34));
   customPeripherals.forEach((cp) => occupied.add(Number(cp.gpio)));
   return occupied;
 }
 
+export function getAvailableI2cPairs(
+  peripherals: PeripheralConfig,
+  customPeripherals: CustomPeripheralConfig[]
+): I2cPinPairOption[] {
+  const occupied = getOccupiedGpios(peripherals, customPeripherals);
+  return ESP32_I2C_PIN_PAIRS.filter((pair) => !occupied.has(pair.sda) && !occupied.has(pair.scl));
+}
+
 export function getAvailableGpios(
-  type: CustomPeripheralType,
+  type: CreatePeripheralKind,
   peripherals: PeripheralConfig,
   customPeripherals: CustomPeripheralConfig[]
 ): SafeGpioOption[] {
   const occupied = getOccupiedGpios(peripherals, customPeripherals);
-  return ESP32_SAFE_GPIOS.filter((opt) => {
+  const filtered = ESP32_SAFE_GPIOS.filter((opt) => {
     if (occupied.has(opt.gpio)) return false;
-    if (type === 'RELAY_OUTPUT') return opt.supportsOutput;
-    if (type === 'ANALOG_INPUT') return opt.supportsAdcWithWifi;
+    if (type === 'RELAY_OUTPUT' || type === 'BUILTIN_FAN' || type === 'BUILTIN_BUZZER') {
+      return opt.supportsOutput;
+    }
+    if (type === 'ANALOG_INPUT' || type === 'BUILTIN_MQ135') {
+      return opt.supportsAdcWithWifi;
+    }
     return true;
   });
+
+  // Đưa chân phần cứng mặc định lên đầu danh sách tương ứng khi thêm lại thiết bị chuẩn
+  const preferredPinMap: Partial<Record<CreatePeripheralKind, number>> = {
+    BUILTIN_MQ135: 34,
+    BUILTIN_DOOR: 27,
+    BUILTIN_FAN: 25,
+    BUILTIN_BUZZER: 33,
+  };
+  const preferred = preferredPinMap[type];
+  if (preferred !== undefined) {
+    return [...filtered].sort((a, b) => (a.gpio === preferred ? -1 : b.gpio === preferred ? 1 : 0));
+  }
+  return filtered;
 }

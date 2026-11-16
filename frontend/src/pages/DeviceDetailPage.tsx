@@ -20,7 +20,10 @@ import {
   DEFAULT_PERIPHERAL_CONFIG,
   normalizePeripherals,
   PeripheralDefinition,
+  CreatePeripheralKind,
   getAvailableGpios,
+  getAvailableI2cPairs,
+  getPeripheralPinLabel,
 } from '../utils/peripherals';
 import {
   LineChart,
@@ -41,6 +44,7 @@ import {
   Thermometer,
   Droplets,
   Wind,
+  Flame,
   Send,
   Volume2,
   Cpu,
@@ -68,6 +72,8 @@ export const DeviceDetailPage: React.FC = () => {
   const [tempCrit, setTempCrit] = useState(28.0);
   const [humWarn, setHumWarn] = useState(65.0);
   const [humCrit, setHumCrit] = useState(70.0);
+  const [emcWarn, setEmcWarn] = useState(14.0);
+  const [emcCrit, setEmcCrit] = useState(14.8);
   const [gasWarn, setGasWarn] = useState(600);
   const [gasCrit, setGasCrit] = useState(700);
   const [peripherals, setPeripherals] = useState<Required<PeripheralConfig>>(
@@ -77,11 +83,12 @@ export const DeviceDetailPage: React.FC = () => {
   const [isConfiguring, setIsConfiguring] = useState(false);
   const [showAddPeripheralMenu, setShowAddPeripheralMenu] = useState(false);
 
-  // Modal tạo thiết bị ngoại vi mới hoàn toàn (GPIO tùy chọn)
+  // Modal tạo thiết bị ngoại vi mới hoàn toàn (thiết bị chuẩn hoặc GPIO tùy chọn)
   const [isCreateCustomOpen, setIsCreateCustomOpen] = useState(false);
   const [cpName, setCpName] = useState('');
-  const [cpType, setCpType] = useState<CustomPeripheralType>('RELAY_OUTPUT');
+  const [cpType, setCpType] = useState<CreatePeripheralKind>('RELAY_OUTPUT');
   const [cpGpio, setCpGpio] = useState<number>(26);
+  const [cpI2cPairId, setCpI2cPairId] = useState<string>('21-22');
   const [cpUnit, setCpUnit] = useState('%');
 
   const fetchDeviceData = async () => {
@@ -94,13 +101,15 @@ export const DeviceDetailPage: React.FC = () => {
         if (res.data.commands) setCommands(res.data.commands);
 
         const cfg = res.data.config_json || {};
-        if (cfg.sampling_interval_ms) setSamplingInterval(cfg.sampling_interval_ms);
-        if (cfg.temp_warn_threshold) setTempWarn(cfg.temp_warn_threshold);
-        if (cfg.temp_crit_threshold) setTempCrit(cfg.temp_crit_threshold);
-        if (cfg.hum_warn_threshold) setHumWarn(cfg.hum_warn_threshold);
-        if (cfg.hum_crit_threshold) setHumCrit(cfg.hum_crit_threshold);
-        if (cfg.gas_warn_threshold) setGasWarn(cfg.gas_warn_threshold);
-        if (cfg.gas_crit_threshold) setGasCrit(cfg.gas_crit_threshold);
+        if (typeof cfg.sampling_interval_ms === 'number') setSamplingInterval(cfg.sampling_interval_ms);
+        if (typeof cfg.temp_warn_threshold === 'number') setTempWarn(cfg.temp_warn_threshold);
+        if (typeof cfg.temp_crit_threshold === 'number') setTempCrit(cfg.temp_crit_threshold);
+        if (typeof cfg.hum_warn_threshold === 'number') setHumWarn(cfg.hum_warn_threshold);
+        if (typeof cfg.hum_crit_threshold === 'number') setHumCrit(cfg.hum_crit_threshold);
+        if (typeof cfg.emc_warn_threshold === 'number') setEmcWarn(cfg.emc_warn_threshold);
+        if (typeof cfg.emc_crit_threshold === 'number') setEmcCrit(cfg.emc_crit_threshold);
+        if (typeof cfg.gas_warn_threshold === 'number') setGasWarn(cfg.gas_warn_threshold);
+        if (typeof cfg.gas_crit_threshold === 'number') setGasCrit(cfg.gas_crit_threshold);
         setPeripherals(normalizePeripherals(cfg.peripherals));
         setCustomPeripherals(Array.isArray(cfg.custom_peripherals) ? cfg.custom_peripherals : []);
       }
@@ -223,31 +232,117 @@ export const DeviceDetailPage: React.FC = () => {
   };
 
   const openCreateCustomModal = () => {
-    const initialType: CustomPeripheralType = 'RELAY_OUTPUT';
-    const avail = getAvailableGpios(initialType, peripherals, customPeripherals);
+    const initialType: CreatePeripheralKind = !peripherals.aht20_enabled
+      ? 'BUILTIN_AHT20'
+      : !peripherals.mq135_enabled
+      ? 'BUILTIN_MQ135'
+      : !peripherals.door_enabled
+      ? 'BUILTIN_DOOR'
+      : !peripherals.fan_enabled
+      ? 'BUILTIN_FAN'
+      : !peripherals.buzzer_enabled
+      ? 'BUILTIN_BUZZER'
+      : 'RELAY_OUTPUT';
+
     setCpName('');
     setCpType(initialType);
-    setCpGpio(avail[0]?.gpio ?? 26);
     setCpUnit('%');
+    if (initialType === 'BUILTIN_AHT20') {
+      const i2cPairs = getAvailableI2cPairs(peripherals, customPeripherals);
+      setCpI2cPairId(i2cPairs[0]?.id ?? '21-22');
+    } else {
+      const avail = getAvailableGpios(initialType, peripherals, customPeripherals);
+      setCpGpio(avail[0]?.gpio ?? 26);
+    }
     setIsCreateCustomOpen(true);
   };
 
-  const handleCustomTypeChange = (nextType: CustomPeripheralType) => {
+  const handleCustomTypeChange = (nextType: CreatePeripheralKind) => {
     setCpType(nextType);
-    const avail = getAvailableGpios(nextType, peripherals, customPeripherals);
-    setCpGpio(avail[0]?.gpio ?? 26);
+    if (nextType === 'BUILTIN_AHT20') {
+      const i2cPairs = getAvailableI2cPairs(peripherals, customPeripherals);
+      setCpI2cPairId(i2cPairs[0]?.id ?? '21-22');
+    } else {
+      const avail = getAvailableGpios(nextType, peripherals, customPeripherals);
+      setCpGpio(avail[0]?.gpio ?? 26);
+    }
   };
 
   const handleCreateCustomSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = cpName.trim();
-    if (!trimmed) {
-      showToast('Vui lòng nhập tên thiết bị ngoại vi!', 'warning');
+
+    if (cpType === 'BUILTIN_AHT20') {
+      const i2cPairs = getAvailableI2cPairs(peripherals, customPeripherals);
+      const selectedPair = i2cPairs.find((p) => p.id === cpI2cPairId);
+      if (!selectedPair) {
+        showToast('Chưa chọn cặp chân I2C hợp lệ còn trống (SDA/SCL)!', 'warning');
+        return;
+      }
+      const next: Required<PeripheralConfig> = {
+        ...peripherals,
+        aht20_enabled: true,
+        aht20_sda_gpio: selectedPair.sda,
+        aht20_scl_gpio: selectedPair.scl,
+      };
+      setIsCreateCustomOpen(false);
+      applyPeripheralsUpdate(
+        next,
+        customPeripherals,
+        `Đã thêm Cảm biến Nhiệt & Ẩm (AHT20) vào GPIO ${selectedPair.sda}/${selectedPair.scl} (I2C) và đồng bộ xuống ESP32.`
+      );
       return;
     }
+
     const avail = getAvailableGpios(cpType, peripherals, customPeripherals);
     if (avail.length === 0 || !avail.some((a) => a.gpio === cpGpio)) {
       showToast('Chưa chọn chân GPIO hợp lệ còn trống!', 'warning');
+      return;
+    }
+
+    if (cpType === 'BUILTIN_MQ135') {
+      const next: Required<PeripheralConfig> = { ...peripherals, mq135_enabled: true, mq135_gpio: cpGpio };
+      setIsCreateCustomOpen(false);
+      applyPeripheralsUpdate(
+        next,
+        customPeripherals,
+        `Đã thêm Cảm biến Khí Gas (MQ-135) vào GPIO ${cpGpio} và đồng bộ xuống ESP32.`
+      );
+      return;
+    }
+    if (cpType === 'BUILTIN_DOOR') {
+      const next: Required<PeripheralConfig> = { ...peripherals, door_enabled: true, door_gpio: cpGpio };
+      setIsCreateCustomOpen(false);
+      applyPeripheralsUpdate(
+        next,
+        customPeripherals,
+        `Đã thêm Cảm biến Cửa Kho vào GPIO ${cpGpio} và đồng bộ xuống ESP32.`
+      );
+      return;
+    }
+    if (cpType === 'BUILTIN_FAN') {
+      const next: Required<PeripheralConfig> = { ...peripherals, fan_enabled: true, fan_gpio: cpGpio };
+      setIsCreateCustomOpen(false);
+      applyPeripheralsUpdate(
+        next,
+        customPeripherals,
+        `Đã thêm Quạt Thông Gió vào GPIO ${cpGpio} và đồng bộ xuống ESP32.`
+      );
+      return;
+    }
+    if (cpType === 'BUILTIN_BUZZER') {
+      const next: Required<PeripheralConfig> = { ...peripherals, buzzer_enabled: true, buzzer_gpio: cpGpio };
+      setIsCreateCustomOpen(false);
+      applyPeripheralsUpdate(
+        next,
+        customPeripherals,
+        `Đã thêm Còi Báo Động vào GPIO ${cpGpio} và đồng bộ xuống ESP32.`
+      );
+      return;
+    }
+
+    const trimmed = cpName.trim();
+    if (!trimmed) {
+      showToast('Vui lòng nhập tên thiết bị ngoại vi!', 'warning');
       return;
     }
 
@@ -311,6 +406,8 @@ export const DeviceDetailPage: React.FC = () => {
         temp_crit_threshold: Number(tempCrit),
         hum_warn_threshold: Number(humWarn),
         hum_crit_threshold: Number(humCrit),
+        emc_warn_threshold: Number(emcWarn),
+        emc_crit_threshold: Number(emcCrit),
         gas_warn_threshold: Number(gasWarn),
         gas_crit_threshold: Number(gasCrit),
       };
@@ -366,6 +463,9 @@ export const DeviceDetailPage: React.FC = () => {
   const rhs = validAhtLogs.map((t) => t.humidity_air);
   const emcs = validAhtLogs.map((t) => t.estimated_emc);
 
+  const validGasLogs = telemetryHistory.filter((t) => typeof t.gas_ppm === 'number' && t.gas_ppm > 0);
+  const gases = validGasLogs.map((t) => t.gas_ppm);
+
   const avgTemp = temps.length ? (temps.reduce((a, b) => a + b, 0) / temps.length).toFixed(1) : '--';
   const maxTemp = temps.length ? Math.max(...temps).toFixed(1) : '--';
   const minTemp = temps.length ? Math.min(...temps).toFixed(1) : '--';
@@ -376,22 +476,37 @@ export const DeviceDetailPage: React.FC = () => {
 
   const avgEMC = emcs.length ? (emcs.reduce((a, b) => a + b, 0) / emcs.length).toFixed(1) : '--';
 
+  const avgGas = gases.length ? Math.round(gases.reduce((a, b) => a + b, 0) / gases.length) : '--';
+  const maxGas = gases.length ? Math.round(Math.max(...gases)) : '--';
+  const minGas = gases.length ? Math.round(Math.min(...gases)) : '--';
+
   const wsData = latestTelemetry[device.device_code];
+  const latestLog = telemetryHistory[telemetryHistory.length - 1];
   const sensorHealth = wsData?.sensor_health ?? device.sensor_health;
   const doorOpen = wsData?.door_open ?? device.door_open;
-  const currentRisk = wsData?.risk_level ?? telemetryHistory[telemetryHistory.length - 1]?.risk_level ?? 'SAFE';
+  const currentRisk = wsData?.risk_level ?? latestLog?.risk_level ?? 'SAFE';
   const currentFanState = wsData
     ? wsData.fan_state === 'ON'
-    : telemetryHistory[telemetryHistory.length - 1]?.fan_state ?? false;
+    : latestLog?.fan_state ?? false;
   const currentBuzzerState = wsData ? wsData.buzzer_state === 'ON' : false;
   const runtimeCustomList: CustomPeripheralRuntimeState[] =
     wsData?.custom_peripherals ?? device.custom_peripherals ?? [];
 
+  const ahtEnabled = peripherals.aht20_enabled !== false;
+  const mqEnabled = peripherals.mq135_enabled !== false;
   const fanEnabled = peripherals.fan_enabled !== false;
   const buzzerEnabled = peripherals.buzzer_enabled !== false;
 
+  const aht20Ok = !ahtEnabled || (sensorHealth?.aht20 ? sensorHealth.aht20.ok : true);
+  const mq135Ok = !mqEnabled || (sensorHealth?.mq135 ? sensorHealth.mq135.ok : true);
+  const liveTemp = wsData ? wsData.temperature : latestLog?.temperature ?? null;
+  const liveRH = wsData ? wsData.humidity_air : latestLog?.humidity_air ?? null;
+  const liveEMC = wsData ? wsData.estimated_emc : latestLog?.estimated_emc ?? null;
+  const liveGas = wsData ? wsData.gas_ppm : latestLog?.gas_ppm ?? null;
+
   const attachedPeripherals = PERIPHERAL_CATALOG.filter((p) => peripherals[p.enabledKey] !== false);
   const removedPeripherals = PERIPHERAL_CATALOG.filter((p) => peripherals[p.enabledKey] === false);
+  const availableI2cPairsForModal = getAvailableI2cPairs(peripherals, customPeripherals);
   const availableGpiosForModal = getAvailableGpios(cpType, peripherals, customPeripherals);
 
   const chartData = telemetryHistory.map((item) => ({
@@ -402,6 +517,7 @@ export const DeviceDetailPage: React.FC = () => {
     'Nhiệt độ (°C)': item.temperature,
     'Độ ẩm (%RH)': item.humidity_air,
     'Ẩm hạt (%MC)': item.estimated_emc,
+    'Khí Gas (ppm)': item.gas_ppm,
   }));
 
   const formatCommandType = (type: string, payload?: any) => {
@@ -543,7 +659,7 @@ export const DeviceDetailPage: React.FC = () => {
                     <div className="text-[11px] text-slate-500 mt-0.5">{item.description}</div>
                     <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-semibold">
                       <Cpu className="w-3 h-3 text-slate-500" />
-                      Chân: {item.pinLabel}
+                      Chân: {getPeripheralPinLabel(item.id, peripherals)}
                     </div>
                   </div>
                   <button
@@ -581,7 +697,7 @@ export const DeviceDetailPage: React.FC = () => {
                       </span>
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700 text-[10px] font-semibold">
                         <Cpu className="w-3 h-3 text-emerald-600" />
-                        {item.pinLabel}
+                        {getPeripheralPinLabel(item.id, peripherals)}
                       </span>
                     </div>
                     <div className="text-xs font-bold text-slate-900 mt-1">{item.name}</div>
@@ -734,45 +850,92 @@ export const DeviceDetailPage: React.FC = () => {
         variant="detailed"
       />
 
-      {/* Thống kê trung bình */}
-      {peripherals.aht20_enabled && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-            <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
-              <Thermometer className="w-4 h-4 text-amber-500" />
-              <span>Nhiệt độ trung bình</span>
-            </div>
-            <div className="flex items-baseline justify-between mt-2">
-              <span className="text-2xl font-bold text-slate-900">{avgTemp}°C</span>
-              <span className="text-xs text-slate-500">
-                {minTemp}°C – {maxTemp}°C
-              </span>
-            </div>
-          </div>
+      {/* Thông số hiện tại & Thống kê */}
+      {(ahtEnabled || mqEnabled) && (
+        <div
+          className={`grid grid-cols-1 gap-4 ${
+            ahtEnabled && mqEnabled
+              ? 'sm:grid-cols-2 lg:grid-cols-4'
+              : ahtEnabled
+              ? 'sm:grid-cols-3'
+              : 'sm:grid-cols-1'
+          }`}
+        >
+          {ahtEnabled && (
+            <>
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+                  <span className="flex items-center gap-1.5">
+                    <Thermometer className="w-4 h-4 text-amber-500" />
+                    <span>Nhiệt độ</span>
+                  </span>
+                  <span className="text-[11px] text-slate-400">Báo: &ge;{tempWarn}°C</span>
+                </div>
+                <div className="text-2xl font-bold text-slate-900 mt-2">
+                  {aht20Ok && liveTemp !== null ? `${liveTemp}°C` : '--'}
+                </div>
+                <div className="text-xs text-slate-500 mt-1.5">
+                  TB: {avgTemp}°C ({minTemp}–{maxTemp}°C)
+                </div>
+              </div>
 
-          <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-            <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
-              <Droplets className="w-4 h-4 text-sky-500" />
-              <span>Độ ẩm không khí TB</span>
-            </div>
-            <div className="flex items-baseline justify-between mt-2">
-              <span className="text-2xl font-bold text-slate-900">{avgRH}%</span>
-              <span className="text-xs text-slate-500">
-                {minRH}% – {maxRH}%
-              </span>
-            </div>
-          </div>
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+                  <span className="flex items-center gap-1.5">
+                    <Droplets className="w-4 h-4 text-sky-500" />
+                    <span>Độ ẩm không khí</span>
+                  </span>
+                  <span className="text-[11px] text-slate-400">Báo: &ge;{humWarn}%</span>
+                </div>
+                <div className="text-2xl font-bold text-slate-900 mt-2">
+                  {aht20Ok && liveRH !== null ? `${liveRH}%` : '--'}
+                </div>
+                <div className="text-xs text-slate-500 mt-1.5">
+                  TB: {avgRH}% ({minRH}–{maxRH}%)
+                </div>
+              </div>
 
-          <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-            <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
-              <Wind className="w-4 h-4 text-emerald-600" />
-              <span>Độ ẩm hạt trung bình</span>
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+                  <span className="flex items-center gap-1.5">
+                    <Wind className="w-4 h-4 text-emerald-600" />
+                    <span>Độ ẩm hạt (EMC)</span>
+                  </span>
+                  <span className="text-[11px] text-slate-400">Báo: &ge;{emcWarn}%</span>
+                </div>
+                <div className="text-2xl font-bold text-emerald-700 mt-2">
+                  {aht20Ok && liveEMC !== null ? `${liveEMC}%` : '--'}
+                </div>
+                <div className="text-xs text-slate-500 mt-1.5">
+                  TB: {avgEMC}% &middot; An toàn &le; {emcWarn}%
+                </div>
+              </div>
+            </>
+          )}
+
+          {mqEnabled && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+                <span className="flex items-center gap-1.5">
+                  <Flame className="w-4 h-4 text-purple-600" />
+                  <span>Khí Gas (MQ-135)</span>
+                </span>
+                <span className="text-[11px] text-slate-400">Báo: &ge;{gasWarn} ppm</span>
+              </div>
+              <div className="text-2xl font-bold text-slate-900 mt-2">
+                {mq135Ok && liveGas !== null ? (
+                  <>
+                    {liveGas} <span className="text-xs font-medium text-slate-500">ppm</span>
+                  </>
+                ) : (
+                  '--'
+                )}
+              </div>
+              <div className="text-xs text-slate-500 mt-1.5">
+                TB: {avgGas} ppm ({minGas}–{maxGas} ppm)
+              </div>
             </div>
-            <div className="flex items-baseline justify-between mt-2">
-              <span className="text-2xl font-bold text-emerald-700">{avgEMC}%</span>
-              <span className="text-xs text-slate-500">An toàn &le; 14.0%</span>
-            </div>
-          </div>
+          )}
         </div>
       )}
 
@@ -791,10 +954,24 @@ export const DeviceDetailPage: React.FC = () => {
 
         <div className="h-72 w-full">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+            <LineChart data={chartData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
               <XAxis dataKey="time" stroke="#64748b" tick={{ fontSize: 11 }} />
-              <YAxis stroke="#64748b" tick={{ fontSize: 11 }} domain={['dataMin - 5', 'dataMax + 5']} />
+              <YAxis
+                yAxisId="climate"
+                stroke="#64748b"
+                tick={{ fontSize: 11 }}
+                domain={['dataMin - 5', 'dataMax + 5']}
+              />
+              {mqEnabled && (
+                <YAxis
+                  yAxisId="gas"
+                  orientation="right"
+                  stroke="#9333ea"
+                  tick={{ fontSize: 11 }}
+                  domain={[0, 'dataMax + 100']}
+                />
+              )}
               <Tooltip
                 contentStyle={{
                   backgroundColor: '#ffffff',
@@ -805,30 +982,48 @@ export const DeviceDetailPage: React.FC = () => {
                 }}
               />
               <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
-              <Line
-                type="monotone"
-                dataKey="Nhiệt độ (°C)"
-                stroke="#f59e0b"
-                strokeWidth={2}
-                dot={false}
-                isAnimationActive={false}
-              />
-              <Line
-                type="monotone"
-                dataKey="Độ ẩm (%RH)"
-                stroke="#0ea5e9"
-                strokeWidth={2}
-                dot={false}
-                isAnimationActive={false}
-              />
-              <Line
-                type="monotone"
-                dataKey="Ẩm hạt (%MC)"
-                stroke="#10b981"
-                strokeWidth={2}
-                dot={false}
-                isAnimationActive={false}
-              />
+              {ahtEnabled && (
+                <>
+                  <Line
+                    yAxisId="climate"
+                    type="monotone"
+                    dataKey="Nhiệt độ (°C)"
+                    stroke="#f59e0b"
+                    strokeWidth={2}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    yAxisId="climate"
+                    type="monotone"
+                    dataKey="Độ ẩm (%RH)"
+                    stroke="#0ea5e9"
+                    strokeWidth={2}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    yAxisId="climate"
+                    type="monotone"
+                    dataKey="Ẩm hạt (%MC)"
+                    stroke="#10b981"
+                    strokeWidth={2}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                </>
+              )}
+              {mqEnabled && (
+                <Line
+                  yAxisId="gas"
+                  type="monotone"
+                  dataKey="Khí Gas (ppm)"
+                  stroke="#9333ea"
+                  strokeWidth={2}
+                  dot={false}
+                  isAnimationActive={false}
+                />
+              )}
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -898,6 +1093,26 @@ export const DeviceDetailPage: React.FC = () => {
                   step="0.5"
                   value={humCrit}
                   onChange={(e) => setHumCrit(Number(e.target.value))}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-900 focus:outline-none focus:border-rose-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Ẩm hạt cảnh báo (%)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={emcWarn}
+                  onChange={(e) => setEmcWarn(Number(e.target.value))}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-900 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-rose-700 mb-1">Ẩm hạt nguy hiểm (%)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={emcCrit}
+                  onChange={(e) => setEmcCrit(Number(e.target.value))}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-900 focus:outline-none focus:border-rose-500"
                 />
               </div>
@@ -1015,38 +1230,89 @@ export const DeviceDetailPage: React.FC = () => {
             <form onSubmit={handleCreateCustomSubmit} className="space-y-3.5 text-xs">
               <div>
                 <label className="block text-slate-700 font-semibold mb-1">
-                  Tên thiết bị *
-                </label>
-                <input
-                  type="text"
-                  placeholder="VD: Đèn cảnh báo, Quạt hút 2, Cảm biến chuyển động..."
-                  value={cpName}
-                  onChange={(e) => setCpName(e.target.value)}
-                  className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:outline-none focus:border-emerald-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-700 font-semibold mb-1">
                   Loại thiết bị *
                 </label>
                 <select
                   value={cpType}
-                  onChange={(e) => handleCustomTypeChange(e.target.value as CustomPeripheralType)}
+                  onChange={(e) => handleCustomTypeChange(e.target.value as CreatePeripheralKind)}
                   className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:outline-none focus:border-emerald-500"
                 >
-                  <option value="RELAY_OUTPUT">Thiết bị bật / tắt (Quạt, Đèn, Còi, Bơm...)</option>
-                  <option value="DIGITAL_INPUT">Cảm biến đóng / mở (0 / 1)</option>
-                  <option value="ANALOG_INPUT">Cảm biến đo mức (Analog 0–100%)</option>
+                  {removedPeripherals.length > 0 && (
+                    <optgroup label="Thiết bị chuẩn của mạch (đang gỡ)">
+                      {!peripherals.aht20_enabled && (
+                        <option value="BUILTIN_AHT20">
+                          Cảm biến Nhiệt &amp; Ẩm (AHT20 — I2C 2 chân 21/22)
+                        </option>
+                      )}
+                      {!peripherals.mq135_enabled && (
+                        <option value="BUILTIN_MQ135">
+                          Cảm biến Khí Gas (MQ-135 — Analog)
+                        </option>
+                      )}
+                      {!peripherals.door_enabled && (
+                        <option value="BUILTIN_DOOR">
+                          Cảm biến Cửa Kho (Digital)
+                        </option>
+                      )}
+                      {!peripherals.fan_enabled && (
+                        <option value="BUILTIN_FAN">
+                          Quạt Thông Gió (Relay)
+                        </option>
+                      )}
+                      {!peripherals.buzzer_enabled && (
+                        <option value="BUILTIN_BUZZER">
+                          Còi Báo Động (Relay)
+                        </option>
+                      )}
+                    </optgroup>
+                  )}
+                  <optgroup label="Ngoại vi mở rộng tự tạo (GPIO đơn)">
+                    <option value="RELAY_OUTPUT">Thiết bị bật / tắt (Quạt, Đèn, Còi, Bơm...)</option>
+                    <option value="DIGITAL_INPUT">Cảm biến đóng / mở (0 / 1)</option>
+                    <option value="ANALOG_INPUT">Cảm biến đo mức (Analog 0–100%)</option>
+                  </optgroup>
                 </select>
               </div>
+
+              {!cpType.startsWith('BUILTIN_') && (
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">
+                    Tên thiết bị *
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="VD: Đèn cảnh báo, Quạt hút 2, Cảm biến chuyển động..."
+                    value={cpName}
+                    onChange={(e) => setCpName(e.target.value)}
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:outline-none focus:border-emerald-500"
+                    required
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block text-slate-700 font-semibold mb-1">
                   Chân cắm trên ESP32 *
                 </label>
-                {availableGpiosForModal.length === 0 ? (
+                {cpType === 'BUILTIN_AHT20' ? (
+                  availableI2cPairsForModal.length === 0 ? (
+                    <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700">
+                      Cặp chân I2C (21/22 hoặc 16/17) đang bị thiết bị khác chiếm dụng.
+                    </div>
+                  ) : (
+                    <select
+                      value={cpI2cPairId}
+                      onChange={(e) => setCpI2cPairId(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm text-slate-900 focus:outline-none focus:border-emerald-500"
+                    >
+                      {availableI2cPairsForModal.map((pair) => (
+                        <option key={pair.id} value={pair.id}>
+                          {pair.label}
+                        </option>
+                      ))}
+                    </select>
+                  )
+                ) : availableGpiosForModal.length === 0 ? (
                   <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700">
                     Không còn chân GPIO trống phù hợp cho loại thiết bị này.
                   </div>
@@ -1090,7 +1356,12 @@ export const DeviceDetailPage: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={isConfiguring || availableGpiosForModal.length === 0}
+                  disabled={
+                    isConfiguring ||
+                    (cpType === 'BUILTIN_AHT20'
+                      ? availableI2cPairsForModal.length === 0
+                      : availableGpiosForModal.length === 0)
+                  }
                   className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs disabled:opacity-50"
                 >
                   Thêm vào thiết bị

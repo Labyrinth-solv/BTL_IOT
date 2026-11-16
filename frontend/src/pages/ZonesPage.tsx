@@ -6,11 +6,8 @@ import {
   Warehouse,
   Plus,
   RefreshCw,
-  Droplets,
-  Layers,
   User as UserIcon,
   Cpu,
-  FileText,
   Pencil,
   Trash2,
 } from 'lucide-react';
@@ -26,8 +23,6 @@ export const ZonesPage: React.FC = () => {
   const [editingZone, setEditingZone] = useState<WarehouseZone | null>(null);
   const [zoneName, setZoneName] = useState('');
   const [grainType, setGrainType] = useState('Thóc tẻ');
-  const [targetMc, setTargetMc] = useState(14.0);
-  const [maxRh, setMaxRh] = useState(65.0);
   const [managerId, setManagerId] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -63,8 +58,6 @@ export const ZonesPage: React.FC = () => {
     setEditingZone(null);
     setZoneName('');
     setGrainType('Thóc tẻ');
-    setTargetMc(14.0);
-    setMaxRh(65.0);
     if (users.length > 0) setManagerId(users[0].id);
     setIsModalOpen(true);
   };
@@ -73,8 +66,6 @@ export const ZonesPage: React.FC = () => {
     setEditingZone(zone);
     setZoneName(zone.name);
     setGrainType(zone.grain_type);
-    setTargetMc(zone.target_mc);
-    setMaxRh(zone.max_rh);
     setManagerId(zone.manager_id || users[0]?.id || '');
     setIsModalOpen(true);
   };
@@ -91,8 +82,7 @@ export const ZonesPage: React.FC = () => {
       const payload = {
         name: zoneName.trim(),
         grain_type: grainType.trim(),
-        target_mc: Number(targetMc),
-        max_rh: Number(maxRh),
+        ...(editingZone ? {} : { target_mc: 14.0, max_rh: 65.0 }),
         ...(managerId ? { manager_id: managerId } : {}),
       };
 
@@ -149,7 +139,7 @@ export const ZonesPage: React.FC = () => {
             <span>Khu vực Kho Silo</span>
           </h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            Quản lý các khu vực bảo quản ngũ cốc và ngưỡng độ ẩm mục tiêu
+            Quản lý các khu vực bảo quản ngũ cốc và phân công người phụ trách
           </p>
         </div>
 
@@ -172,21 +162,6 @@ export const ZonesPage: React.FC = () => {
               <span>Thêm Khu Vực</span>
             </button>
           )}
-        </div>
-      </div>
-
-      {/* TCVN Banner */}
-      <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-4 flex items-start gap-3.5">
-        <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
-          <FileText className="w-5 h-5" />
-        </div>
-        <div className="text-xs space-y-1">
-          <div className="font-bold text-amber-900 text-sm">
-            Ngưỡng bảo quản an toàn
-          </div>
-          <div className="text-amber-800 leading-relaxed">
-            Độ ẩm hạt an toàn không vượt quá <strong>14.0% – 14.5%</strong> và độ ẩm không khí không vượt quá <strong>65%</strong>.
-          </div>
         </div>
       </div>
 
@@ -216,29 +191,7 @@ export const ZonesPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100">
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                  <div className="flex items-center gap-1.5 text-slate-500 text-xs">
-                    <Droplets className="w-3.5 h-3.5 text-amber-600" />
-                    <span>Ẩm hạt mục tiêu</span>
-                  </div>
-                  <div className="text-xl font-bold text-slate-900 mt-1">
-                    {zone.target_mc}%
-                  </div>
-                </div>
-
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                  <div className="flex items-center gap-1.5 text-slate-500 text-xs">
-                    <Layers className="w-3.5 h-3.5 text-sky-600" />
-                    <span>Ẩm không khí tối đa</span>
-                  </div>
-                  <div className="text-xl font-bold text-slate-900 mt-1">
-                    {zone.max_rh}%
-                  </div>
-                </div>
-              </div>
-
-              <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-3 text-xs text-slate-500">
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-3 text-xs text-slate-500">
                 <div className="flex items-center gap-2">
                   <UserIcon className="w-3.5 h-3.5 text-slate-400" />
                   <span>
@@ -317,35 +270,6 @@ export const ZonesPage: React.FC = () => {
                   className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:border-emerald-500"
                   required
                 />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">
-                    Ẩm hạt mục tiêu (%)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={targetMc}
-                    onChange={(e) => setTargetMc(parseFloat(e.target.value))}
-                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">
-                    Ẩm khí tối đa (%)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    value={maxRh}
-                    onChange={(e) => setMaxRh(parseFloat(e.target.value))}
-                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900"
-                    required
-                  />
-                </div>
               </div>
 
               <div>
