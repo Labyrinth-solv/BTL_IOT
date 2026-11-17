@@ -60,7 +60,7 @@ export const DeviceDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { isAdmin, isViewer, showToast } = useAuth();
-  const { latestTelemetry, latestAck } = useSocket();
+  const { latestTelemetry, deviceStatus, latestAck } = useSocket();
 
   const [device, setDevice] = useState<Device | null>(null);
   const [telemetryHistory, setTelemetryHistory] = useState<TelemetryLog[]>([]);
@@ -481,18 +481,22 @@ export const DeviceDetailPage: React.FC = () => {
   const minGas = gases.length ? Math.round(Math.min(...gases)) : '--';
 
   const wsData = latestTelemetry[device.device_code];
+  const wsStatus = deviceStatus[device.device_code];
+  const isOnline = wsStatus ? wsStatus.state !== 'OFFLINE' : device.is_online;
   const latestLog = telemetryHistory[telemetryHistory.length - 1];
   const sensorHealth = wsData?.sensor_health ?? device.sensor_health;
   const doorOpen = wsData?.door_open ?? device.door_open;
   const currentRisk = wsData?.risk_level ?? latestLog?.risk_level ?? 'SAFE';
-  const currentFanState = wsData
-    ? wsData.fan_state === 'ON'
-    : latestLog?.fan_state ?? false;
+  const currentFanState = isOnline
+    ? wsData
+      ? wsData.fan_state === 'ON'
+      : latestLog?.fan_state ?? false
+    : false;
   const currentFanMode =
     wsData?.control_mode ??
     device.control_mode ??
     (peripherals.fan_auto !== false ? 'AUTO' : 'MANUAL');
-  const currentBuzzerState = wsData ? wsData.buzzer_state === 'ON' : false;
+  const currentBuzzerState = isOnline && wsData ? wsData.buzzer_state === 'ON' : false;
   const runtimeCustomList: CustomPeripheralRuntimeState[] =
     wsData?.custom_peripherals ?? device.custom_peripherals ?? [];
 
@@ -555,7 +559,14 @@ export const DeviceDetailPage: React.FC = () => {
             <div className="flex items-center gap-2.5 flex-wrap">
               <h1 className="text-xl font-bold text-slate-900">{device.name}</h1>
               <LifecycleBadge state={device.lifecycle_state} />
-              <RiskBadge risk={currentRisk} />
+              {isOnline ? (
+                <RiskBadge risk={currentRisk} />
+              ) : (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                  <span className="w-2 h-2 rounded-full bg-slate-400" />
+                  Ngoại tuyến
+                </span>
+              )}
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
               {device.zone?.name || 'Chưa phân khu vực'} &middot; Mã thiết bị: {device.device_code}
@@ -567,19 +578,22 @@ export const DeviceDetailPage: React.FC = () => {
           {fanEnabled && (
             <button
               onClick={() => handleControlActuator('VENTILATION_FAN', currentFanState)}
-              disabled={isViewer}
+              disabled={!isOnline || isViewer}
               className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
-                isViewer
+                !isOnline || isViewer
                   ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
                   : currentFanState
                   ? 'bg-amber-500 text-white border-amber-500 shadow-sm cursor-pointer'
                   : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 cursor-pointer'
               }`}
             >
-              <Fan className={`w-4 h-4 ${currentFanState ? 'animate-spin' : ''}`} />
+              <Fan className={`w-4 h-4 ${isOnline && currentFanState ? 'animate-spin' : ''}`} />
               <span>
-                Quạt: {currentFanState ? 'Đang bật' : 'Đang tắt'} (
-                {currentFanMode === 'MANUAL' ? 'Thủ công' : 'Tự động'})
+                {!isOnline
+                  ? 'Quạt: Ngoại tuyến'
+                  : `Quạt: ${currentFanState ? 'Đang bật' : 'Đang tắt'} (${
+                      currentFanMode === 'MANUAL' ? 'Thủ công' : 'Tự động'
+                    })`}
               </span>
             </button>
           )}
@@ -587,17 +601,31 @@ export const DeviceDetailPage: React.FC = () => {
           {buzzerEnabled && (
             <button
               onClick={() => handleControlActuator('ALARM_BUZZER', currentBuzzerState)}
-              disabled={isViewer}
+              disabled={!isOnline || isViewer}
               className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
-                isViewer
+                !isOnline || isViewer
                   ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
                   : currentBuzzerState
                   ? 'bg-rose-600 text-white border-rose-600 shadow-sm cursor-pointer'
                   : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 cursor-pointer'
               }`}
             >
-              <Volume2 className={`w-4 h-4 ${currentBuzzerState ? 'animate-bounce' : 'text-rose-500'}`} />
-              <span>{currentBuzzerState ? 'Còi đang kêu (Tắt)' : 'Bật thử còi'}</span>
+              <Volume2
+                className={`w-4 h-4 ${
+                  !isOnline
+                    ? 'text-slate-400'
+                    : currentBuzzerState
+                    ? 'animate-bounce'
+                    : 'text-rose-500'
+                }`}
+              />
+              <span>
+                {!isOnline
+                  ? 'Còi: Ngoại tuyến'
+                  : currentBuzzerState
+                  ? 'Còi đang kêu (Tắt)'
+                  : 'Bật còi báo động'}
+              </span>
             </button>
           )}
         </div>
@@ -696,7 +724,7 @@ export const DeviceDetailPage: React.FC = () => {
               let connClass = 'bg-slate-100 text-slate-600 border-slate-200';
               let connNote: string | undefined;
 
-              if (!device.is_online) {
+              if (!isOnline) {
                 connLabel = 'Mạch ngoại tuyến';
                 connClass = 'bg-slate-100 text-slate-600 border-slate-200';
                 connNote = 'ESP32 đang mất kết nối mạng.';
@@ -817,7 +845,7 @@ export const DeviceDetailPage: React.FC = () => {
 
               let cpConnLabel = 'Mạch ngoại tuyến';
               let cpConnClass = 'bg-slate-100 text-slate-600 border-slate-200';
-              if (!device.is_online) {
+              if (!isOnline) {
                 cpConnLabel = 'Mạch ngoại tuyến';
                 cpConnClass = 'bg-slate-100 text-slate-600 border-slate-200';
               } else if (cp.type === 'RELAY_OUTPUT') {
@@ -891,7 +919,12 @@ export const DeviceDetailPage: React.FC = () => {
                   </div>
 
                   <div className="pt-2.5 border-t border-sky-200/70 flex items-center justify-between text-xs">
-                    {cp.type === 'RELAY_OUTPUT' ? (
+                    {!isOnline ? (
+                      <>
+                        <span className="text-slate-500">Trạng thái:</span>
+                        <span className="text-slate-400 font-medium">Tạm ẩn (ngoại tuyến)</span>
+                      </>
+                    ) : cp.type === 'RELAY_OUTPUT' ? (
                       <>
                         <span className="text-slate-600">
                           Trạng thái:{' '}
@@ -950,12 +983,12 @@ export const DeviceDetailPage: React.FC = () => {
         sensorHealth={sensorHealth}
         peripherals={peripherals}
         doorOpen={doorOpen}
-        isOnline={device.is_online}
+        isOnline={isOnline}
         variant="detailed"
       />
 
       {/* Thông số hiện tại & Thống kê */}
-      {(ahtEnabled || mqEnabled) && (
+      {isOnline && (ahtEnabled || mqEnabled) && (
         <div
           className={`grid grid-cols-1 gap-4 ${
             ahtEnabled && mqEnabled

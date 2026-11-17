@@ -628,6 +628,8 @@ export class MQTTService {
     if (state === 'OFFLINE') {
       console.warn(`⚠️ [MQTTService] Thiết bị OFFLINE qua LWT: ${deviceCode} (Lý do: ${reason || 'Mất kết nối'})`);
 
+      this.clearDeviceDiagnostics(deviceCode);
+
       await prisma.device.update({
         where: { id: device.id },
         data: {
@@ -904,6 +906,8 @@ export class MQTTService {
 
         for (const dev of staleDevices) {
           console.warn(`⚠️ [MQTTService] Thiết bị ${dev.device_code} quá 45s không có tín hiệu -> Chuyển OFFLINE`);
+
+          this.clearDeviceDiagnostics(dev.device_code);
 
           await prisma.device.update({
             where: { id: dev.id },

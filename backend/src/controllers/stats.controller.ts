@@ -46,7 +46,7 @@ export class StatsController {
             sumEMC += log.estimated_emc;
             countWithData++;
           }
-          if (log.fan_state) activeFansCount++;
+          if (dev.is_online && log.fan_state) activeFansCount++;
         }
       });
 

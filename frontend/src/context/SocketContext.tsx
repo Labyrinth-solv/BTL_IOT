@@ -86,6 +86,14 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         ...prev,
         [data.device_id]: data,
       }));
+      if (data.state === 'OFFLINE' || data.is_online === false) {
+        setLatestTelemetry((prev) => {
+          if (!prev[data.device_id]) return prev;
+          const next = { ...prev };
+          delete next[data.device_id];
+          return next;
+        });
+      }
     };
 
     const handleNewAlert = (alert: Alert) => {

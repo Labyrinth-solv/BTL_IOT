@@ -62,16 +62,24 @@ export const SensorHealthPanel: React.FC<SensorHealthPanelProps> = ({
     return null;
   }
 
+  if (!isOnline) {
+    if (variant === 'detailed') {
+      return (
+        <div className="bg-white border border-slate-200 rounded-2xl p-4 flex items-center gap-3 text-sm text-slate-600 shadow-sm">
+          <Info className="w-4 h-4 text-slate-400 shrink-0" />
+          <span>Thiết bị đang ngoại tuyến — Tạm ẩn trạng thái cảm biến.</span>
+        </div>
+      );
+    }
+    return null;
+  }
+
   if (!sensorHealth) {
     if (variant === 'detailed') {
       return (
         <div className="bg-white border border-slate-200 rounded-2xl p-4 flex items-center gap-3 text-sm text-slate-600 shadow-sm">
           <Info className="w-4 h-4 text-slate-400 shrink-0" />
-          <span>
-            {isOnline
-              ? 'Đang chờ dữ liệu kiểm tra cảm biến từ thiết bị.'
-              : 'Thiết bị đang ngoại tuyến.'}
-          </span>
+          <span>Đang chờ dữ liệu kiểm tra cảm biến từ thiết bị.</span>
         </div>
       );
     }

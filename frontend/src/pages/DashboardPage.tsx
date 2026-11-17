@@ -184,6 +184,22 @@ export const DashboardPage: React.FC = () => {
 
   const activeDashboardDevices = devices.filter((d) => d.lifecycle_state !== 'DECOMMISSIONED');
 
+  const liveOnlineCount = activeDashboardDevices.filter((dev) => {
+    const st = deviceStatus[dev.device_code];
+    return st ? st.state !== 'OFFLINE' : dev.is_online;
+  }).length;
+  const liveOfflineCount = activeDashboardDevices.length - liveOnlineCount;
+
+  const liveActiveFansCount = activeDashboardDevices.filter((dev) => {
+    const st = deviceStatus[dev.device_code];
+    const online = st ? st.state !== 'OFFLINE' : dev.is_online;
+    if (!online) return false;
+    const periphCfg = normalizePeripherals((dev.config_json as any)?.peripherals);
+    if (!periphCfg.fan_enabled) return false;
+    const wsD = latestTelemetry[dev.device_code];
+    return wsD ? wsD.fan_state === 'ON' : Boolean(dev.telemetry_logs?.[0]?.fan_state);
+  }).length;
+
   return (
     <div className="space-y-6">
       {/* Top Header */}
@@ -228,15 +244,17 @@ export const DashboardPage: React.FC = () => {
             </span>
           </div>
           <div className="text-2xl font-bold text-slate-900 mt-2">
-            {kpi?.total_devices ?? devices.length}
+            {activeDashboardDevices.length > 0 || !kpi ? activeDashboardDevices.length : kpi.total_devices}
           </div>
           <div className="flex items-center gap-3 mt-2 text-xs text-slate-600">
             <span className="text-emerald-700 font-medium flex items-center gap-1">
               <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              {kpi?.online_devices || 0} trực tuyến
+              {devices.length > 0 || !kpi ? liveOnlineCount : kpi.online_devices} trực tuyến
             </span>
             <span className="text-slate-300">|</span>
-            <span className="text-slate-500">{kpi?.offline_devices || 0} ngoại tuyến</span>
+            <span className="text-slate-500">
+              {devices.length > 0 || !kpi ? liveOfflineCount : kpi.offline_devices} ngoại tuyến
+            </span>
           </div>
         </div>
 
@@ -271,7 +289,7 @@ export const DashboardPage: React.FC = () => {
             </span>
           </div>
           <div className="text-2xl font-bold text-amber-600 mt-2">
-            {kpi?.active_fans_count || 0}
+            {devices.length > 0 || !kpi ? liveActiveFansCount : kpi.active_fans_count}
           </div>
           <div className="text-xs text-slate-500 mt-2">Tự động chạy khi độ ẩm tăng</div>
         </div>
@@ -324,9 +342,9 @@ export const DashboardPage: React.FC = () => {
               const gas: number | null = wsData ? wsData.gas_ppm : latestDbLog?.gas_ppm ?? null;
               const emc: number | null = wsData ? wsData.estimated_emc : latestDbLog?.estimated_emc ?? null;
 
-              const fanActive = wsData ? wsData.fan_state === 'ON' : latestDbLog?.fan_state ?? false;
+              const fanActive = isOnline ? (wsData ? wsData.fan_state === 'ON' : latestDbLog?.fan_state ?? false) : false;
               const currentRisk = wsData ? wsData.risk_level : latestDbLog?.risk_level ?? 'SAFE';
-              const buzzerActive = wsData ? wsData.buzzer_state === 'ON' : currentRisk === 'HIGH_RISK';
+              const buzzerActive = isOnline ? (wsData ? wsData.buzzer_state === 'ON' : currentRisk === 'HIGH_RISK') : false;
 
               const fanPending = pendingCommands[`${device.device_code}:VENTILATION_FAN`];
               const buzzerPending = pendingCommands[`${device.device_code}:ALARM_BUZZER`];
@@ -447,63 +465,65 @@ export const DashboardPage: React.FC = () => {
                           />
                           {isOnline ? 'Trực tuyến' : 'Ngoại tuyến'}
                         </span>
-                        <RiskBadge risk={currentRisk} />
+                        {isOnline && <RiskBadge risk={currentRisk} />}
                       </div>
                     </div>
 
-                    {/* Offline Banner */}
-                    {!isOnline && hasTelemetry && (
-                      <div className="mt-4 px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between gap-2 text-xs text-amber-800">
-                        <span className="flex items-center gap-1.5 font-medium">
-                          <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          <span>Thiết bị ngoại tuyến — Dữ liệu lưu lần cuối</span>
-                        </span>
+                    {!isOnline ? (
+                      <div className="mt-4 p-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50/90 text-center space-y-1.5">
+                        <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                          <Clock className="w-4 h-4 text-slate-400" />
+                          <span>Thiết bị đang ngoại tuyến</span>
+                        </div>
+                        <p className="text-xs text-slate-500">
+                          Đã ẩn các thông số đo lường cho tới khi thiết bị kết nối lại.
+                        </p>
                         {formattedLastSeen && (
-                          <span className="font-medium text-amber-700 shrink-0">
-                            {formattedLastSeen}
-                          </span>
+                          <p className="text-[11px] text-slate-400">
+                            Kết nối gần nhất: {formattedLastSeen}
+                          </p>
                         )}
                       </div>
-                    )}
-
-                    {/* Temperature Threshold Alert Banner */}
-                    {isOnline && (isTempCrit || isTempWarn) && (
-                      <div
-                        className={`mt-4 px-3 py-2 rounded-xl border flex items-center justify-between gap-2 text-xs font-medium ${
-                          isTempCrit
-                            ? 'bg-rose-50 border-rose-200 text-rose-800'
-                            : 'bg-amber-50 border-amber-200 text-amber-800'
-                        }`}
-                      >
-                        <span className="flex items-center gap-1.5">
-                          <Thermometer
-                            className={`w-3.5 h-3.5 shrink-0 ${
-                              isTempCrit ? 'text-rose-600' : 'text-amber-600'
-                            }`}
-                          />
-                          <span>
-                            {isTempCrit
-                              ? `Nhiệt độ đạt ngưỡng nguy hiểm (${temp}°C ≥ ${tempCritThreshold}°C)`
-                              : `Nhiệt độ đạt ngưỡng cảnh báo (${temp}°C ≥ ${tempWarnThreshold}°C)`}
-                          </span>
-                        </span>
-                      </div>
-                    )}
-
-                    {/* Visible Sensor Metrics (Chỉ hiện các cảm biến đang gắn) */}
-                    {metricCount === 0 ? (
-                      <div className="mt-4 p-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-between gap-3 text-xs text-slate-500">
-                        <span>Node này hiện đã gỡ hết cảm biến đo lường.</span>
-                        <button
-                          onClick={() => navigate(`/devices/${device.id}`)}
-                          className="inline-flex items-center gap-1 font-semibold text-emerald-700 hover:text-emerald-800 shrink-0"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          Thêm cảm biến
-                        </button>
-                      </div>
                     ) : (
-                      <div className={`grid ${metricsGridClass} gap-3 ${!isOnline && hasTelemetry ? 'mt-3' : 'mt-5'}`}>
+                      <>
+                        {/* Temperature Threshold Alert Banner */}
+                        {(isTempCrit || isTempWarn) && (
+                          <div
+                            className={`mt-4 px-3 py-2 rounded-xl border flex items-center justify-between gap-2 text-xs font-medium ${
+                              isTempCrit
+                                ? 'bg-rose-50 border-rose-200 text-rose-800'
+                                : 'bg-amber-50 border-amber-200 text-amber-800'
+                            }`}
+                          >
+                            <span className="flex items-center gap-1.5">
+                              <Thermometer
+                                className={`w-3.5 h-3.5 shrink-0 ${
+                                  isTempCrit ? 'text-rose-600' : 'text-amber-600'
+                                }`}
+                              />
+                              <span>
+                                {isTempCrit
+                                  ? `Nhiệt độ đạt ngưỡng nguy hiểm (${temp}°C ≥ ${tempCritThreshold}°C)`
+                                  : `Nhiệt độ đạt ngưỡng cảnh báo (${temp}°C ≥ ${tempWarnThreshold}°C)`}
+                              </span>
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Visible Sensor Metrics (Chỉ hiện các cảm biến đang gắn) */}
+                        {metricCount === 0 ? (
+                          <div className="mt-4 p-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-between gap-3 text-xs text-slate-500">
+                            <span>Node này hiện đã gỡ hết cảm biến đo lường.</span>
+                            <button
+                              onClick={() => navigate(`/devices/${device.id}`)}
+                              className="inline-flex items-center gap-1 font-semibold text-emerald-700 hover:text-emerald-800 shrink-0"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              Thêm cảm biến
+                            </button>
+                          </div>
+                        ) : (
+                          <div className={`grid ${metricsGridClass} gap-3 mt-5`}>
                         {ahtEnabled && (
                           <>
                             {/* Nhiệt độ */}
@@ -742,11 +762,44 @@ export const DashboardPage: React.FC = () => {
                       isOnline={isOnline}
                       variant="compact"
                     />
+                      </>
+                    )}
                   </div>
 
-                  {/* Footer Controls (Chỉ hiển thị Quạt / Còi nếu chưa bị gỡ bỏ) */}
+                  {/* Footer Controls (Đồng bộ Ngoại tuyến khi ESP32 mất kết nối) */}
                   <div className="mt-5 pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-wrap items-center gap-3">
+                      {!isOnline ? (
+                        <>
+                          {fanEnabled && (
+                            <span className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500 border border-slate-200">
+                              <Fan className="w-3.5 h-3.5 text-slate-400" />
+                              <span>Quạt: Ngoại tuyến</span>
+                            </span>
+                          )}
+                          {buzzerEnabled && (
+                            <span className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500 border border-slate-200">
+                              <Volume2 className="w-3.5 h-3.5 text-slate-400" />
+                              <span>Còi: Ngoại tuyến</span>
+                            </span>
+                          )}
+                          {customRelays.map((cr) => (
+                            <span
+                              key={cr.id}
+                              className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500 border border-slate-200"
+                            >
+                              <Power className="w-3.5 h-3.5 text-slate-400" />
+                              <span>{cr.name}: Ngoại tuyến</span>
+                            </span>
+                          ))}
+                          {!fanEnabled && !buzzerEnabled && customRelays.length === 0 && (
+                            <span className="text-xs text-slate-400">
+                              Đã ẩn Quạt &amp; Còi
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <>
                       {fanEnabled && (
                         <div className="flex items-center gap-2.5">
                           <button
@@ -815,7 +868,7 @@ export const DashboardPage: React.FC = () => {
                               ? 'Đang gửi...'
                               : buzzerActive
                               ? 'Còi đang kêu (Tắt)'
-                              : 'Bật thử còi'}
+                              : 'Bật còi báo động'}
                           </span>
                         </button>
                       )}
@@ -854,6 +907,8 @@ export const DashboardPage: React.FC = () => {
                         <span className="text-xs text-slate-400">
                           Đã ẩn Quạt &amp; Còi
                         </span>
+                      )}
+                        </>
                       )}
                     </div>
 
