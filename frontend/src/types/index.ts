@@ -142,6 +142,8 @@ export interface Device {
   sensor_health?: SensorHealth | null;
   door_open?: boolean | null;
   control_mode?: string | null;
+  fan_state?: 'ON' | 'OFF' | null;
+  buzzer_state?: 'ON' | 'OFF' | null;
   custom_peripherals?: CustomPeripheralRuntimeState[];
   ip_address?: string | null;
   mac_address?: string | null;

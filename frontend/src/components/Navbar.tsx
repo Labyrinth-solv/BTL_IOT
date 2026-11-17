@@ -31,7 +31,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
-    <header className="h-16 bg-white/95 backdrop-blur-md border-b border-slate-200 px-6 flex items-center justify-between sticky top-0 z-30 shadow-sm">
+    <header className="h-16 bg-white/95 backdrop-blur-md border-b border-slate-200 px-3 sm:px-6 flex items-center justify-between sticky top-0 z-30 shadow-sm">
       {/* Brand */}
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center text-xl">
@@ -41,7 +41,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div className="text-base font-bold text-slate-900">
             Smart Grain Storage
           </div>
-          <div className="text-xs text-slate-500">Giám sát &amp; bảo quản kho ngũ cốc thông minh</div>
+          <div className="hidden md:block text-xs text-slate-500">Giám sát &amp; bảo quản kho ngũ cốc thông minh</div>
         </div>
       </div>
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
+import { waitForCommandAck } from '../services/socket';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { CustomPeripheralConfig, CustomPeripheralRuntimeState, Device, DashboardKPI } from '../types';
@@ -39,7 +40,7 @@ interface PendingCommandEntry {
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const { isAdmin, isViewer, showToast, user } = useAuth();
-  const { latestTelemetry, deviceStatus, latestAck, discoveredDevices } = useSocket();
+  const { latestTelemetry, deviceStatus, discoveredDevices } = useSocket();
 
   const [devices, setDevices] = useState<Device[]>([]);
   const [kpi, setKpi] = useState<DashboardKPI | null>(null);
@@ -76,189 +77,30 @@ export const DashboardPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [user]);
 
-  useEffect(() => {
-    const matchedKeys: string[] = [];
-
-    Object.entries(pendingCommands).forEach(([key, pending]) => {
-      const ack = Object.values(latestAck).find((a: any) =>
-        pending.cmdId ? a.cmd_id === pending.cmdId : a.device_id === key.split(':')[0]
-      ) as any;
-
-      if (!ack) return;
-      matchedKeys.push(key);
-
-      const devCode = ack.device_id;
-      if (ack.status === 'SUCCESS') {
-        if (pending.target === 'ALARM_BUZZER') {
-          const buzzerState = ack.current_actuators?.buzzer_state || pending.targetState;
-          showToast(`Còi báo động đã ${buzzerState === 'ON' ? 'BẬT' : 'TẮT'}`, 'success');
-        } else if (pending.target === 'CUSTOM_PERIPHERAL') {
-          showToast(
-            `${pending.label || 'Thiết bị'} đã ${pending.targetState === 'ON' ? 'BẬT' : 'TẮT'}`,
-            'success'
-          );
-        } else if (pending.targetState === 'AUTO') {
-          const fanState = ack.current_actuators?.fan_state;
-          showToast(
-            `Quạt thông gió đã bật Tự động (${fanState === 'ON' ? 'Đang bật' : 'Đang tắt'})`,
-            'success'
-          );
-        } else {
-          const fanState = ack.current_actuators?.fan_state;
-          showToast(
-            `Quạt thông gió đã chuyển sang ${fanState === 'ON' ? 'BẬT' : 'TẮT'}`,
-            'success'
-          );
-        }
-      } else {
-        showToast(`${devCode}: ${ack.message || 'Thiết bị không phản hồi lệnh'}`, 'error');
-      }
-    });
-
-    if (matchedKeys.length > 0) {
-      setPendingCommands((prev) => {
-        const updated = { ...prev };
-        matchedKeys.forEach((k) => delete updated[k]);
-        return updated;
-      });
-    }
-  }, [latestAck]);
-
-  const handleToggleActuator = async (
-    device: Device,
-    target: ActuatorTarget,
-    currentState: boolean,
-    customPeripheral?: CustomPeripheralConfig
-  ) => {
-    if (isViewer) {
-      showToast('Vai trò Giám sát QC chỉ có quyền xem, không thể điều khiển.', 'error');
-      return;
-    }
-
-    const action = currentState ? 'TURN_OFF' : 'TURN_ON';
-    const isCustom = target === 'CUSTOM_PERIPHERAL' && customPeripheral;
-    const pendingKey = isCustom
-      ? `${device.device_code}:CP:${customPeripheral.id}`
-      : `${device.device_code}:${target}`;
-    const isFan = target === 'VENTILATION_FAN';
-    const label = isCustom
-      ? customPeripheral.name
-      : isFan
-      ? 'quạt thông gió'
-      : 'còi báo động';
-
-    setPendingCommands((prev) => ({
-      ...prev,
-      [pendingKey]: {
-        target,
-        label,
-        targetState: action === 'TURN_ON' ? 'ON' : 'OFF',
-        timestamp: Date.now(),
-      },
-    }));
-
+  const sendActuatorCommand = async (device: Device, target: ActuatorTarget, action: string, custom?: CustomPeripheralConfig) => {
+    if (isViewer) return;
+    const key = target === 'CUSTOM_PERIPHERAL' ? `${device.device_code}:CP:${custom?.id}` : `${device.device_code}:${target}`;
+    if (pendingCommands[key]) return;
+    setPendingCommands(prev => ({ ...prev, [key]: { target, targetState: action, timestamp: Date.now() } }));
     try {
       const res = await api.controlActuator(device.id, {
-        target,
-        action,
-        ...(isCustom ? { peripheral_id: customPeripheral.id } : {}),
-        ...(isFan ? { control_mode: 'MANUAL' } : {}),
+        target, action,
+        ...(custom ? { peripheral_id: custom.id } : {}),
+        ...(target === 'VENTILATION_FAN' ? { control_mode: action === 'SET_AUTO' ? 'AUTO' : 'MANUAL' } : {}),
       });
-
-      if (res.success) {
-        if (isFan) {
-          setDevices((prev) =>
-            prev.map((d) =>
-              d.id === device.id
-                ? {
-                    ...d,
-                    control_mode: 'MANUAL',
-                    config_json: {
-                      ...(d.config_json || {}),
-                      peripherals: {
-                        ...((d.config_json as any)?.peripherals || {}),
-                        fan_auto: false,
-                      },
-                    },
-                  }
-                : d
-            )
-          );
-        }
-        if (res.data?.cmd_id) {
-          setPendingCommands((prev) =>
-            prev[pendingKey]
-              ? { ...prev, [pendingKey]: { ...prev[pendingKey], cmdId: res.data.cmd_id } }
-              : prev
-          );
-        }
-      }
-    } catch (err: any) {
-      setPendingCommands((prev) => {
-        const copy = { ...prev };
-        delete copy[pendingKey];
-        return copy;
-      });
-      showToast(err.message || `Không gửi được lệnh điều khiển ${label}`, 'error');
+      await waitForCommandAck(res.data?.cmd_id);
+      await fetchData();
+      showToast('Thiết bị đã xác nhận áp dụng lệnh.', 'success');
+    } catch (error: any) {
+      showToast(error.message || 'Thiết bị chưa xác nhận lệnh', 'error');
+    } finally {
+      setPendingCommands(prev => { const next = { ...prev }; delete next[key]; return next; });
     }
   };
 
-  const handleSwitchFanAuto = async (device: Device) => {
-    if (isViewer) {
-      showToast('Vai trò Giám sát QC chỉ có quyền xem, không thể điều khiển.', 'error');
-      return;
-    }
-    const pendingKey = `${device.device_code}:VENTILATION_FAN`;
-    setPendingCommands((prev) => ({
-      ...prev,
-      [pendingKey]: {
-        target: 'VENTILATION_FAN',
-        label: 'quạt thông gió',
-        targetState: 'AUTO',
-        timestamp: Date.now(),
-      },
-    }));
-    try {
-      const res = await api.controlActuator(device.id, {
-        target: 'VENTILATION_FAN',
-        action: 'SET_AUTO',
-        control_mode: 'AUTO',
-      });
-      if (res.success) {
-        setDevices((prev) =>
-          prev.map((d) =>
-            d.id === device.id
-              ? {
-                  ...d,
-                  control_mode: 'AUTO',
-                  config_json: {
-                    ...(d.config_json || {}),
-                    peripherals: {
-                      ...((d.config_json as any)?.peripherals || {}),
-                      fan_auto: true,
-                    },
-                  },
-                }
-              : d
-          )
-        );
-        if (res.data?.cmd_id) {
-          setPendingCommands((prev) =>
-            prev[pendingKey]
-              ? { ...prev, [pendingKey]: { ...prev[pendingKey], cmdId: res.data.cmd_id } }
-              : prev
-          );
-        }
-      }
-    } catch (err: any) {
-      setPendingCommands((prev) => {
-        const copy = { ...prev };
-        delete copy[pendingKey];
-        return copy;
-      });
-      showToast(err.message || 'Không chuyển được quạt về chế độ tự động', 'error');
-    }
-  };
+  const handleToggleActuator = (device: Device, target: ActuatorTarget, currentState: boolean, custom?: CustomPeripheralConfig) =>
+    sendActuatorCommand(device, target, currentState ? 'TURN_OFF' : 'TURN_ON', custom);
+  const handleSwitchFanAuto = (device: Device) => sendActuatorCommand(device, 'VENTILATION_FAN', 'SET_AUTO');
 
   const registeredCodes = new Set(devices.map((d) => d.device_code));
   const socketUnregisteredCount = Object.values(discoveredDevices).filter(
@@ -270,18 +112,18 @@ export const DashboardPage: React.FC = () => {
 
   const liveOnlineCount = activeDashboardDevices.filter((dev) => {
     const st = deviceStatus[dev.device_code];
-    return st ? st.state !== 'OFFLINE' : dev.is_online;
+    return st ? st.is_online ?? st.state === 'ONLINE' : dev.is_online;
   }).length;
   const liveOfflineCount = activeDashboardDevices.length - liveOnlineCount;
 
   const liveActiveFansCount = activeDashboardDevices.filter((dev) => {
     const st = deviceStatus[dev.device_code];
-    const online = st ? st.state !== 'OFFLINE' : dev.is_online;
+    const online = st ? st.is_online ?? st.state === 'ONLINE' : dev.is_online;
     if (!online) return false;
     const periphCfg = normalizePeripherals((dev.config_json as any)?.peripherals);
     if (!periphCfg.fan_enabled) return false;
     const wsD = latestTelemetry[dev.device_code];
-    return wsD ? wsD.fan_state === 'ON' : Boolean(dev.telemetry_logs?.[0]?.fan_state);
+    return (wsD?.fan_state ?? dev.fan_state) === 'ON';
   }).length;
 
   return (
@@ -416,7 +258,7 @@ export const DashboardPage: React.FC = () => {
             {activeDashboardDevices.map((device) => {
               const wsData = latestTelemetry[device.device_code];
               const wsStatus = deviceStatus[device.device_code];
-              const isOnline = wsStatus ? wsStatus.state !== 'OFFLINE' : device.is_online;
+              const isOnline = wsStatus ? wsStatus.is_online ?? wsStatus.state === 'ONLINE' : device.is_online;
 
               const latestDbLog = device.telemetry_logs?.[0];
               const hasTelemetry = Boolean(wsData || latestDbLog);
@@ -426,9 +268,11 @@ export const DashboardPage: React.FC = () => {
               const gas: number | null = wsData ? wsData.gas_ppm : latestDbLog?.gas_ppm ?? null;
               const emc: number | null = wsData ? wsData.estimated_emc : latestDbLog?.estimated_emc ?? null;
 
-              const fanActive = isOnline ? (wsData ? wsData.fan_state === 'ON' : latestDbLog?.fan_state ?? false) : false;
+              const fanActive = isOnline ? ((wsData?.fan_state ?? device.fan_state) === 'ON') : false;
               const currentRisk = wsData ? wsData.risk_level : latestDbLog?.risk_level ?? 'SAFE';
-              const buzzerActive = isOnline ? (wsData ? wsData.buzzer_state === 'ON' : currentRisk === 'HIGH_RISK') : false;
+              const fanStateKnown = Boolean(wsData?.fan_state ?? device.fan_state);
+              const buzzerStateKnown = Boolean(wsData?.buzzer_state ?? device.buzzer_state);
+              const buzzerActive = isOnline ? ((wsData?.buzzer_state ?? device.buzzer_state) === 'ON') : false;
 
               const fanPending = pendingCommands[`${device.device_code}:VENTILATION_FAN`];
               const buzzerPending = pendingCommands[`${device.device_code}:ALARM_BUZZER`];
@@ -509,7 +353,6 @@ export const DashboardPage: React.FC = () => {
 
               const hiddenCount = [
                 !periph.aht20_enabled,
-                !periph.mq135_enabled,
                 !periph.door_enabled,
                 !periph.fan_enabled,
                 !periph.buzzer_enabled,
@@ -560,8 +403,20 @@ export const DashboardPage: React.FC = () => {
                           <span>Thiết bị đang ngoại tuyến</span>
                         </div>
                         <p className="text-xs text-slate-500">
-                          Đã ẩn các thông số đo lường cho tới khi thiết bị kết nối lại.
+                          Chưa có dữ liệu đo. Đang chờ thiết bị kết nối lại.
                         </p>
+                        <div className={`grid ${metricsGridClass} gap-3 pt-3 text-left`}>
+                          {[
+                            ...(periph.aht20_enabled ? ['Nhiệt độ', 'Độ ẩm không khí', 'Độ ẩm hạt (EMC)'] : []),
+                            ...(periph.mq135_enabled ? ['Khí Gas (MQ-135)'] : []),
+                            ...customSensors.map(sensor => sensor.name),
+                          ].map((label, index) => (
+                            <div key={`${label}-${index}`} className="rounded-xl border border-slate-200 bg-white/60 p-3.5">
+                              <div className="text-xs text-slate-500">{label}</div>
+                              <div className="text-2xl font-bold text-slate-400 mt-1.5">--</div>
+                            </div>
+                          ))}
+                        </div>
                         {formattedLastSeen && (
                           <p className="text-[11px] text-slate-400">
                             Kết nối gần nhất: {formattedLastSeen}
@@ -888,7 +743,7 @@ export const DashboardPage: React.FC = () => {
                         <div className="flex items-center gap-2.5">
                           <button
                             type="button"
-                            disabled={!isOnline || isViewer}
+                            disabled={!isOnline || isViewer || !fanStateKnown || Object.keys(pendingCommands).some(key => key.startsWith(`${device.device_code}:`))}
                             onClick={() => handleToggleActuator(device, 'VENTILATION_FAN', fanActive)}
                             className={`relative inline-flex h-6 w-12 items-center rounded-full transition-colors focus:outline-none ${
                               !isOnline || isViewer
@@ -923,7 +778,7 @@ export const DashboardPage: React.FC = () => {
                               />
                               <span>Quạt:</span>
                               <span className={fanActive ? 'text-amber-700 font-bold' : 'text-slate-500'}>
-                                {fanPending ? 'Đang gửi...' : fanActive ? 'Đang bật' : 'Đang tắt'}
+                                {fanPending ? 'Đang chờ xác nhận...' : !fanStateKnown ? 'Chờ trạng thái' : fanActive ? 'Đang bật' : 'Đang tắt'}
                               </span>
                               {fanMode === 'MANUAL' && !isViewer ? (
                                 <button
@@ -948,7 +803,7 @@ export const DashboardPage: React.FC = () => {
                       {buzzerEnabled && (
                         <button
                           type="button"
-                          disabled={!isOnline || isViewer}
+                          disabled={!isOnline || isViewer || !buzzerStateKnown || Object.keys(pendingCommands).some(key => key.startsWith(`${device.device_code}:`))}
                           onClick={() => handleToggleActuator(device, 'ALARM_BUZZER', buzzerActive)}
                           className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl transition-all border ${
                             !isOnline || isViewer
@@ -961,7 +816,8 @@ export const DashboardPage: React.FC = () => {
                           <Volume2 className={`w-3.5 h-3.5 ${isOnline && buzzerActive ? 'animate-bounce' : 'text-rose-500'}`} />
                           <span>
                             {buzzerPending
-                              ? 'Đang gửi...'
+                              ? 'Đang chờ xác nhận...'
+                              : !buzzerStateKnown ? 'Còi: Chờ trạng thái'
                               : buzzerActive
                               ? 'Còi đang kêu (Tắt)'
                               : 'Bật còi báo động'}
@@ -978,7 +834,7 @@ export const DashboardPage: React.FC = () => {
                           <button
                             key={cr.id}
                             type="button"
-                            disabled={!isOnline || isViewer}
+                            disabled={!isOnline || isViewer || Object.keys(pendingCommands).some(key => key.startsWith(`${device.device_code}:`))}
                             onClick={() =>
                               handleToggleActuator(device, 'CUSTOM_PERIPHERAL', crActive, cr)
                             }

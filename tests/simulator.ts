@@ -1,6 +1,11 @@
 import mqtt, { MqttClient } from 'mqtt';
 import http from 'http';
 import dotenv from 'dotenv';
+import { validateDeviceConfig } from '../backend/src/services/deviceConfig';
+import { RuleEngineService } from '../backend/src/services/ruleEngine.service';
+import { randomUUID } from 'crypto';
+import * as fs from 'node:fs';
+import { resolve } from 'node:path';
 
 dotenv.config();
 
@@ -41,10 +46,10 @@ let heartbeatTimer: NodeJS.Timeout | null = null;
 const startTime = Date.now();
 
 const primaryDevice: SimulatedDevice = {
-  device_id: 'DEV_SILO_01',
+  device_id: process.env.SIMULATOR_DEVICE_ID || 'DEV_SILO_01',
   name: 'Cảm biến & Quạt Kho Silo A1',
   ip_address: '192.168.1.105',
-  fw_version: '1.0.2',
+  fw_version: 'sim-1.1.3',
   hw_version: 'ESP32-WROOM-32-v1',
   fan_state: 'OFF',
   buzzer_state: 'OFF',
@@ -58,6 +63,36 @@ let latestMetrics = {
   gas_ppm: 405.0,
   estimated_emc: 12.5,
 };
+
+let buzzerAuto = true;
+let buzzerManualOverride = false;
+let buzzerSilencedByUser = false;
+let deviceConfig = validateDeviceConfig({});
+let customRelayStates: Record<string, 'ON' | 'OFF'> = {};
+const commandAcks = new Map<string, any>();
+let currentRiskLevel: 'SAFE' | 'WARNING' | 'HIGH_RISK' = 'SAFE';
+let outputsInhibited = false;
+let registrationId = '';
+const lifecyclePath = resolve(`runtime-simulator-${encodeURIComponent(primaryDevice.device_id)}-lifecycle.log`);
+
+function persistLifecycle(nextRegistration: string, inhibited: boolean, config = deviceConfig) {
+  const temporaryPath = `${lifecyclePath}.tmp.log`;
+  fs.writeFileSync(temporaryPath, JSON.stringify({ registration_id: nextRegistration, outputs_inhibited: inhibited, config_json: config }));
+  fs.renameSync(temporaryPath, lifecyclePath);
+}
+
+if (fs.existsSync(lifecyclePath)) {
+  try {
+    const saved = JSON.parse(fs.readFileSync(lifecyclePath, 'utf8'));
+    if (typeof saved.outputs_inhibited !== 'boolean' || typeof saved.registration_id !== 'string') throw new Error('Invalid lifecycle');
+    registrationId = saved.registration_id;
+    outputsInhibited = saved.outputs_inhibited;
+    deviceConfig = validateDeviceConfig(saved.config_json || {});
+  } catch { outputsInhibited = true; }
+}
+primaryDevice.control_mode = deviceConfig.peripherals.fan_auto ? 'AUTO' : 'MANUAL';
+primaryDevice.sampling_interval_ms = deviceConfig.sampling_interval_ms;
+buzzerAuto = deviceConfig.peripherals.buzzer_auto;
 
 // =============================================================================
 // HÀM TÍNH TOÁN ĐỘ ẨM CÂN BẰNG (EMC) THEO HALSEY / TCVN 8370
@@ -97,11 +132,10 @@ function generateMetrics(scenario: ScenarioType) {
       latestMetrics.humidity_air = Math.round(noise(71.0, 73.5) * 10) / 10;
       latestMetrics.gas_ppm = Math.round(noise(860.0, 930.0) * 10) / 10;
       latestMetrics.estimated_emc = calculateEMC(latestMetrics.temperature, latestMetrics.humidity_air);
-      primaryDevice.buzzer_state = 'ON';
       break;
 
     case 'REVOKED_DEVICE_ATTACK':
-      // Kịch bản 5: Dữ liệu gửi từ thiết bị đã bị thu hồi / khóa
+      // Kịch bản 5: Dữ liệu gửi từ thiết bị bị thu hồi / khóa
       latestMetrics.temperature = Math.round(noise(23.0, 24.5) * 10) / 10;
       latestMetrics.humidity_air = Math.round(noise(60.0, 63.0) * 10) / 10;
       latestMetrics.gas_ppm = Math.round(noise(410.0, 440.0) * 10) / 10;
@@ -115,7 +149,6 @@ function generateMetrics(scenario: ScenarioType) {
       latestMetrics.humidity_air = Math.round(noise(58.5, 61.8) * 10) / 10;
       latestMetrics.gas_ppm = Math.round(noise(390.0, 420.0) * 10) / 10;
       latestMetrics.estimated_emc = calculateEMC(latestMetrics.temperature, latestMetrics.humidity_air);
-      primaryDevice.buzzer_state = 'OFF';
       break;
   }
 
@@ -159,8 +192,6 @@ function connectMqtt(): Promise<void> {
       isConnected = true;
       console.log(`✅ [Simulator] Đã kết nối MQTT Broker thành công với định danh: ${primaryDevice.device_id}!`);
 
-      // Gửi bản tin Heartbeat ONLINE đầu tiên (Mục 3.2.B)
-      sendHeartbeat();
 
       // Đăng ký nhận lệnh từ Backend (/cmd) và lệnh điều khiển kịch bản (grain/simulator/control)
       const cmdTopic = `grain/devices/${primaryDevice.device_id}/cmd`;
@@ -169,6 +200,7 @@ function connectMqtt(): Promise<void> {
       client?.subscribe([cmdTopic, ctrlTopic], { qos: 1 }, (err) => {
         if (!err) {
           console.log(`📡 [Simulator] Đã subscribe: ${cmdTopic} & ${ctrlTopic}`);
+          sendHeartbeat();
         }
       });
 
@@ -212,6 +244,8 @@ function sendHeartbeat() {
   const statusPayload = {
     device_id: primaryDevice.device_id,
     state: 'ONLINE',
+    registration_id: registrationId,
+    outputs_inhibited: outputsInhibited,
     ip_address: primaryDevice.ip_address,
     fw_version: primaryDevice.fw_version,
     hw_version: primaryDevice.hw_version,
@@ -235,16 +269,33 @@ function sendTelemetry() {
   // Nếu đang ở Kịch bản 4 (Disconnect), không gửi tin
   if (currentScenario === 'DISCONNECT_LWT') return;
 
-  const metrics = generateMetrics(currentScenario);
+  const metrics = { ...generateMetrics(currentScenario) };
+  const p = deviceConfig.peripherals;
+  if (!p.aht20_enabled) { metrics.temperature = 0; metrics.humidity_air = 0; metrics.estimated_emc = 0; }
+  if (!p.mq135_enabled) metrics.gas_ppm = 0;
   const now = Date.now();
-  const msgId = `msg_${Math.floor(now / 1000)}_${Math.floor(Math.random() * 900 + 100)}`;
+  const msgId = `sim_${randomUUID()}`;
 
-  // Xác định mức rủi ro để gửi trong payload
-  let riskLevel = 'SAFE';
-  if (metrics.humidity_air > 70.0 || metrics.temperature > 28.0 || metrics.gas_ppm >= 700.0) {
-    riskLevel = 'HIGH_RISK';
-  } else if (metrics.humidity_air > 65.0 || metrics.temperature > 25.0 || metrics.gas_ppm >= 600.0) {
-    riskLevel = 'WARNING';
+  const riskLevel = RuleEngineService.evaluate({
+    ...metrics, custom_config: deviceConfig, aht20_ok: p.aht20_enabled, mq135_ok: p.mq135_enabled,
+  }).risk_level;
+  currentRiskLevel = riskLevel;
+
+  // Đồng bộ trạng thái Còi & Quạt giống logic trên ESP32 thật
+  if (outputsInhibited || !p.buzzer_enabled) {
+    primaryDevice.buzzer_state = 'OFF';
+  } else if (buzzerManualOverride) {
+    primaryDevice.buzzer_state = 'ON';
+  } else if (buzzerAuto && riskLevel === 'HIGH_RISK' && !buzzerSilencedByUser) {
+    primaryDevice.buzzer_state = 'ON';
+  } else {
+    if (riskLevel !== 'HIGH_RISK') buzzerSilencedByUser = false;
+    primaryDevice.buzzer_state = 'OFF';
+  }
+
+  if (outputsInhibited || !p.fan_enabled) primaryDevice.fan_state = 'OFF';
+  else if (primaryDevice.control_mode === 'AUTO') {
+    primaryDevice.fan_state = riskLevel === 'WARNING' || riskLevel === 'HIGH_RISK' ? 'ON' : 'OFF';
   }
 
   // Tùy theo Kịch bản 5: Có thể gửi dưới device_id bị khóa hoặc device_id chuẩn
@@ -253,6 +304,7 @@ function sendTelemetry() {
   const telemetryPayload = {
     msg_id: msgId,
     device_id: targetDeviceId,
+    registration_id: registrationId,
     fw_version: primaryDevice.fw_version,
     timestamp: now,
     metrics: {
@@ -262,11 +314,22 @@ function sendTelemetry() {
       estimated_emc: { value: metrics.estimated_emc, unit: '%MC' },
     },
     actuators: {
+      outputs_inhibited: outputsInhibited,
       fan_state: primaryDevice.fan_state,
       buzzer_state: primaryDevice.buzzer_state,
       control_mode: primaryDevice.control_mode,
       risk_level: riskLevel,
     },
+    sensor_health: {
+      aht20: { enabled: p.aht20_enabled, ok: p.aht20_enabled, status: p.aht20_enabled ? 'SIMULATED' : 'DISABLED' },
+      mq135: { enabled: p.mq135_enabled, ok: p.mq135_enabled, status: p.mq135_enabled ? 'SIMULATED' : 'DISABLED' },
+      door_sensor: { enabled: p.door_enabled, ok: p.door_enabled, status: p.door_enabled ? 'DIGITAL_INPUT' : 'DISABLED' },
+    },
+    custom_peripherals: deviceConfig.custom_peripherals.map((cp: any) => ({
+      id: cp.id, type: cp.type, gpio: cp.gpio,
+      state: cp.type === 'RELAY_OUTPUT' ? customRelayStates[cp.id] || 'OFF' : 'INACTIVE',
+      value: customRelayStates[cp.id] === 'ON' ? 1 : 0,
+    })),
     rssi: Math.floor(-60 - Math.random() * 8),
   };
 
@@ -289,61 +352,85 @@ function handleIncomingCommand(cmd: any) {
   const { cmd_id, type, payload } = cmd;
   if (!cmd_id) return;
 
-  let message = 'Lệnh đã được thực thi thành công';
-
-  if (type === 'ACTUATOR_CONTROL') {
-    const action = payload?.action;
-    const target = payload?.target || 'VENTILATION_FAN';
-
-    if (target === 'VENTILATION_FAN') {
-      if (action === 'TURN_ON') {
-        primaryDevice.fan_state = 'ON';
-        message = 'Relay GPIO 25 switched HIGH (Quạt thông gió BẬT)';
-      } else if (action === 'TURN_OFF') {
-        primaryDevice.fan_state = 'OFF';
-        message = 'Relay GPIO 25 switched LOW (Quạt thông gió TẮT)';
-      }
-      if (payload?.control_mode) {
-        primaryDevice.control_mode = payload.control_mode;
-      }
-    } else if (target === 'ALARM_BUZZER') {
-      if (action === 'TURN_ON') {
-        primaryDevice.buzzer_state = 'ON';
-        message = 'Relay GPIO 33 switched HIGH (Còi báo động BẬT)';
-      } else if (action === 'TURN_OFF') {
-        primaryDevice.buzzer_state = 'OFF';
-        message = 'Relay GPIO 33 switched LOW (Còi báo động TẮT)';
-      }
+  let status = 'SUCCESS';
+  let message = 'Thiết bị giả lập đã áp dụng lệnh';
+  try {
+    if (cmd.device_id && cmd.device_id !== primaryDevice.device_id) return;
+    const incomingRegistration = cmd.registration_id || '';
+    const resuming = type === 'UPDATE_CONFIG' && outputsInhibited && incomingRegistration && incomingRegistration !== registrationId;
+    if ((registrationId && incomingRegistration !== registrationId && !resuming) ||
+        (outputsInhibited && type !== 'DEACTIVATE_NODE' && !resuming) ||
+        (type === 'DEACTIVATE_NODE' && !incomingRegistration)) throw new Error('Node đã khóa đầu ra hoặc lệnh thuộc lần đăng ký cũ; cần đăng ký lại node');
+    const cached = commandAcks.get(cmd_id);
+    if (cached) {
+      client?.publish(`grain/devices/${primaryDevice.device_id}/ack`, JSON.stringify(cached), { qos: 1 });
+      return;
     }
-  } else if (type === 'UPDATE_CONFIG') {
-    if (payload?.sampling_interval_ms && payload.sampling_interval_ms >= 1000) {
-      primaryDevice.sampling_interval_ms = payload.sampling_interval_ms;
-      // Khởi động lại bộ định thời gửi telemetry theo chu kỳ mới
+    if (type === 'DEACTIVATE_NODE') {
+      outputsInhibited = true;
+      registrationId = incomingRegistration;
+      primaryDevice.fan_state = primaryDevice.buzzer_state = 'OFF';
+      buzzerManualOverride = buzzerSilencedByUser = false;
+      for (const cp of deviceConfig.custom_peripherals) if (cp.type === 'RELAY_OUTPUT') customRelayStates[cp.id] = 'OFF';
+      persistLifecycle(registrationId, true);
+      message = 'Đã tắt và lưu khóa đầu ra; chờ đăng ký lại node';
+    } else if (type === 'UPDATE_CONFIG') {
+      const next = validateDeviceConfig(payload, deviceConfig);
+      persistLifecycle(incomingRegistration || registrationId, false, next);
+      registrationId = incomingRegistration || registrationId;
+      outputsInhibited = false;
+      const previous = deviceConfig;
+      const nextStates: typeof customRelayStates = {};
+      for (const cp of next.custom_peripherals) {
+        if (previous.custom_peripherals.some((old: any) => old.id === cp.id && old.gpio === cp.gpio && old.type === cp.type && old.active_high === cp.active_high)) {
+          nextStates[cp.id] = customRelayStates[cp.id] || 'OFF';
+        }
+        if (cp.type === 'RELAY_OUTPUT' && !nextStates[cp.id]) nextStates[cp.id] = 'OFF';
+      }
+      customRelayStates = nextStates;
+      deviceConfig = next;
+      primaryDevice.control_mode = next.peripherals.fan_auto ? 'AUTO' : 'MANUAL';
+      primaryDevice.sampling_interval_ms = next.sampling_interval_ms;
+      if (!buzzerAuto && next.peripherals.buzzer_auto) buzzerSilencedByUser = false;
+      buzzerAuto = next.peripherals.buzzer_auto;
+      if (!next.peripherals.buzzer_enabled) buzzerManualOverride = false;
       restartTelemetryTimer();
-      message = `Đã cập nhật chu kỳ lấy mẫu: ${primaryDevice.sampling_interval_ms}ms`;
-    }
-  }
-
-  // Tự động gửi bản tin xác nhận lên /ack sau đúng 300ms (Mục 3.2.D)
+    } else if (type === 'ACTUATOR_CONTROL') {
+      const { target, action, control_mode, peripheral_id } = payload || {};
+      if (!['TURN_ON', 'TURN_OFF', 'SET_AUTO'].includes(action) ||
+          !['VENTILATION_FAN', 'ALARM_BUZZER', 'CUSTOM_PERIPHERAL'].includes(target) ||
+          (action === 'SET_AUTO' && target !== 'VENTILATION_FAN') ||
+          (control_mode !== undefined && !['AUTO', 'MANUAL'].includes(control_mode))) throw new Error('Lệnh không hợp lệ');
+      if (target === 'VENTILATION_FAN') {
+        if (!deviceConfig.peripherals.fan_enabled) throw new Error('Quạt đang bị vô hiệu hóa');
+        primaryDevice.control_mode = action === 'SET_AUTO' ? 'AUTO' : control_mode || 'MANUAL';
+        deviceConfig.peripherals.fan_auto = primaryDevice.control_mode === 'AUTO';
+        if (action !== 'SET_AUTO') primaryDevice.fan_state = action === 'TURN_ON' ? 'ON' : 'OFF';
+      } else if (target === 'ALARM_BUZZER') {
+        if (!deviceConfig.peripherals.buzzer_enabled) throw new Error('Còi đang bị vô hiệu hóa');
+        buzzerManualOverride = action === 'TURN_ON';
+        buzzerSilencedByUser = action === 'TURN_OFF' && currentRiskLevel === 'HIGH_RISK';
+        primaryDevice.buzzer_state = action === 'TURN_ON' ? 'ON' : 'OFF';
+      } else {
+        if (!deviceConfig.custom_peripherals.some((cp: any) => cp.id === peripheral_id && cp.type === 'RELAY_OUTPUT')) throw new Error('Không tìm thấy relay');
+        customRelayStates[peripheral_id] = action === 'TURN_ON' ? 'ON' : 'OFF';
+      }
+    } else throw new Error('Loại lệnh không được hỗ trợ');
+    sendTelemetry();
+  } catch (error) { status = 'FAILED'; message = (error as Error).message; }
+  const ack = {
+    cmd_id, device_id: primaryDevice.device_id, registration_id: registrationId, status, executed_at: Date.now(), message,
+    current_actuators: {
+      outputs_inhibited: outputsInhibited,
+      fan_state: primaryDevice.fan_state, buzzer_state: primaryDevice.buzzer_state,
+      control_mode: primaryDevice.control_mode, custom_peripherals: { ...customRelayStates },
+    },
+  };
+  commandAcks.set(cmd_id, ack);
+  if (commandAcks.size > 100) commandAcks.delete(commandAcks.keys().next().value!);
   setTimeout(() => {
     if (!client || !isConnected) return;
-
-    const ackPayload = {
-      cmd_id,
-      device_id: primaryDevice.device_id,
-      status: 'SUCCESS',
-      executed_at: Date.now(),
-      current_actuators: {
-        fan_state: primaryDevice.fan_state,
-        buzzer_state: primaryDevice.buzzer_state,
-        control_mode: primaryDevice.control_mode,
-      },
-      message,
-    };
-
-    const ackTopic = `grain/devices/${primaryDevice.device_id}/ack`;
-    client.publish(ackTopic, JSON.stringify(ackPayload), { qos: 1 });
-    console.log(`📤 [Simulator] Đã gửi ACK sau 300ms lên ${ackTopic}: ${message}`);
+    client.publish(`grain/devices/${primaryDevice.device_id}/ack`, JSON.stringify(ack), { qos: 1 });
   }, 300);
 }
 
@@ -453,6 +540,9 @@ function startHttpControlServer() {
           isConnected,
           currentScenario,
           device: primaryDevice,
+          registration_id: registrationId,
+          outputs_inhibited: outputsInhibited,
+          custom_relays: customRelayStates,
           latestMetrics,
         })
       );
@@ -569,6 +659,6 @@ async function main() {
   setupInteractiveCli();
 }
 
-main().catch((err) => {
+if (require.main === module) main().catch((err) => {
   console.error('❌ Lỗi khởi động bộ giả lập:', err);
 });

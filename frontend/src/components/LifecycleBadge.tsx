@@ -5,7 +5,7 @@ export const LifecycleBadge: React.FC<{ state: LifecycleState | string }> = ({ s
   const getLabelAndStyle = () => {
     switch (state) {
       case 'ACTIVE':
-        return { label: 'Hoạt động', style: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+        return { label: 'Đã kích hoạt', style: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
       case 'OFFLINE':
         return { label: 'Ngoại tuyến', style: 'bg-slate-100 text-slate-600 border-slate-200' };
       case 'PROVISIONED':

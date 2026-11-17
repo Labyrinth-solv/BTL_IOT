@@ -4,6 +4,7 @@
   "description": "Smart Grain Storage Monitoring & Preservation System (IoT Kho Ngũ Cốc)",
   "main": "backend/src/server.ts",
   "scripts": {
+    "test": "node --import tsx --test tests/*.test.ts",
     "dev": "tsx watch backend/src/server.ts",
     "start": "tsx backend/src/server.ts",
     "backend:dev": "tsx watch backend/src/server.ts",

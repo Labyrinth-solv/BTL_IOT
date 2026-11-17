@@ -126,6 +126,21 @@ Xem thêm kịch bản thuyết trình & xử lý lỗi chi tiết tại [HUONG_
 
 ## 6. Tài khoản Mẫu & Phân quyền RBAC
 
+### Đồng bộ Web và ESP32 (firmware 1.1.3)
+
+- MQ-135 được giữ trong mã nguồn nhưng mặc định tắt; khi cấu hình node đang tắt MQ-135, Web tiếp tục ẩn cảm biến này và ESP32 không dùng gas để điều khiển tự động.
+- Khi node kết nối lại, backend gửi cấu hình đã lưu xuống ESP32 để đồng bộ với NVS. Chờ ACK trước khi thay đổi cấu hình hoặc điều khiển tiếp.
+- Web chỉ báo áp dụng thành công sau ACK đúng mã lệnh và đúng thiết bị. Lệnh thất bại/timeout không ghi đè cấu hình đã xác nhận trong database.
+- ESP32 tự điều khiển quạt ở chế độ AUTO, kể cả khi mất mạng. Backend tính cảnh báo và không phát thêm lệnh AUTO bật/tắt đối nghịch với mạch.
+- Gỡ/đổi chân relay sẽ tắt đầu ra cũ trước khi bàn giao GPIO. Đầu vào analog dùng ADC1; GPIO34–39 cần điện trở kéo ngoài nếu dùng làm digital input.
+- **Xóa hẳn node:** server gửi `DEACTIVATE_NODE`, chờ ACK xác nhận quạt/còi/relay tùy chọn đều OFF và khóa đầu ra đã lưu vào NVS, sau đó mới xóa node và dữ liệu. AUTO cũng bị chặn, kể cả sau khi khởi động lại mạch. Nếu không có ACK hợp lệ (offline, firmware cũ, lỗi lưu NVS), node vẫn được giữ lại trên Web; kiểm tra kết nối/nạp firmware 1.1.3 rồi thử lại.
+- **Thêm lại node:** đăng ký lại cùng mã ESP32, server cấp `registration_id` mới và đồng bộ cấu hình để mở khóa đầu ra. Quạt/còi hoạt động theo AUTO hoặc lệnh điều khiển mới; relay tùy chọn cần được thêm/cấu hình lại. Lệnh thuộc lần đăng ký cũ không thể bật lại mạch đã xóa. Trong thời gian chưa đăng ký lại, mạch vẫn kết nối MQTT để được phát hiện nhưng tất cả đầu ra giữ OFF.
+- Simulator cũng lưu khóa đầu ra qua lần khởi động trong `runtime-simulator-<device_id>-lifecycle.log` (đã được gitignore).
+- Sau khi cập nhật mã nguồn: khởi động lại backend/frontend và nạp firmware mới bằng PlatformIO. Không cần chạy lại `db:seed` (lệnh seed ghi đè cấu hình mẫu đang lưu).
+- Không chạy simulator cùng ESP32 với cùng `device_id`. Nếu cần chạy đồng thời, đặt biến môi trường `SIMULATOR_DEVICE_ID` thành ID riêng và đăng ký node đó trên Web.
+- Chạy kiểm thử hồi quy bằng `npm test`; kiểm tra firmware bằng `pio run` trong `IOT_Firmware`.
+
+
 Hệ thống sử dụng đăng nhập thực tế (JWT) với phân quyền RBAC kiểm soát cả ở Backend API và giao diện Web. Khi chạy `npm run db:seed`, hệ thống tạo sẵn các tài khoản sau (có thể đăng nhập bằng **tên ngắn** hoặc **email đầy đủ**):
 
 | Vai trò trên Web | Mã Role | Tên đăng nhập / Email & Mật khẩu | Quyền hạn chính |

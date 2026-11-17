@@ -70,7 +70,7 @@ export const DEFAULT_PERIPHERAL_CONFIG: Required<PeripheralConfig> = {
   aht20_enabled: true,
   aht20_sda_gpio: 21,
   aht20_scl_gpio: 22,
-  mq135_enabled: true,
+  mq135_enabled: false,
   mq135_gpio: 34,
   door_enabled: true,
   door_gpio: 27,
@@ -87,7 +87,7 @@ export function normalizePeripherals(raw?: Partial<PeripheralConfig> | null): Re
     aht20_enabled: raw?.aht20_enabled !== false,
     aht20_sda_gpio: typeof raw?.aht20_sda_gpio === 'number' ? raw.aht20_sda_gpio : 21,
     aht20_scl_gpio: typeof raw?.aht20_scl_gpio === 'number' ? raw.aht20_scl_gpio : 22,
-    mq135_enabled: raw?.mq135_enabled !== false,
+    mq135_enabled: raw?.mq135_enabled === true,
     mq135_gpio: typeof raw?.mq135_gpio === 'number' ? raw.mq135_gpio : 34,
     door_enabled: raw?.door_enabled !== false,
     door_gpio: typeof raw?.door_gpio === 'number' ? raw.door_gpio : 27,
@@ -210,6 +210,7 @@ export function getAvailableGpios(
     if (type === 'RELAY_OUTPUT' || type === 'BUILTIN_FAN' || type === 'BUILTIN_BUZZER') {
       return opt.supportsOutput;
     }
+    if (type === 'BUILTIN_DOOR' && !opt.hasInternalPullup) return false;
     if (type === 'ANALOG_INPUT' || type === 'BUILTIN_MQ135') {
       return opt.supportsAdcWithWifi;
     }

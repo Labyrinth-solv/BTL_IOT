@@ -50,7 +50,7 @@ export const SensorHealthPanel: React.FC<SensorHealthPanelProps> = ({
     sensorHealth?.aht20?.enabled !== false &&
     sensorHealth?.aht20?.status !== 'DISABLED';
   const mqEnabled =
-    peripherals?.mq135_enabled !== false &&
+    peripherals?.mq135_enabled === true &&
     sensorHealth?.mq135?.enabled !== false &&
     sensorHealth?.mq135?.status !== 'DISABLED';
   const doorEnabled =

@@ -4,9 +4,20 @@ import crypto from 'crypto';
 import prisma from '../config/prisma';
 import { AuditService } from '../services/audit.service';
 import { MQTTService } from '../services/mqtt.service';
+import { SocketService } from '../services/socket.service';
 import { LifecycleState, Role } from '@prisma/client';
+import { DeviceCommandError, validateDeviceConfig } from '../services/deviceConfig';
 
 export class DeviceController {
+  private static emitLifecycle(device: any): void {
+    if (!device.is_online) MQTTService.clearDeviceDiagnostics(device.device_code);
+    SocketService.emitDeviceStatus({
+      device_id: device.device_code, device_db_id: device.id,
+      is_online: device.is_online, state: device.is_online ? 'ONLINE' : 'OFFLINE',
+      lifecycle_state: device.lifecycle_state,
+    });
+  }
+
   /**
    * Lấy danh sách thiết bị (lọc theo quyền RBAC)
    */
@@ -31,6 +42,8 @@ export class DeviceController {
           sensor_health: diag?.sensor_health ?? null,
           door_open: diag?.door_open ?? null,
           control_mode: diag?.control_mode ?? null,
+          fan_state: diag?.fan_state ?? null,
+          buzzer_state: diag?.buzzer_state ?? null,
           custom_peripherals: diag?.custom_peripherals ?? [],
           ip_address: diag?.ip_address ?? null,
           mac_address: diag?.mac_address ?? null,
@@ -100,6 +113,8 @@ export class DeviceController {
           sensor_health: diag?.sensor_health ?? null,
           door_open: diag?.door_open ?? null,
           control_mode: diag?.control_mode ?? null,
+          fan_state: diag?.fan_state ?? null,
+          buzzer_state: diag?.buzzer_state ?? null,
           custom_peripherals: diag?.custom_peripherals ?? [],
           ip_address: diag?.ip_address ?? null,
           mac_address: diag?.mac_address ?? null,
@@ -156,6 +171,15 @@ export class DeviceController {
             emc_crit_threshold: 14.8,
             gas_warn_threshold: 600.0,
             gas_crit_threshold: 700.0,
+            peripherals: {
+              aht20_enabled: true,
+              mq135_enabled: false,
+              door_enabled: true,
+              fan_enabled: true,
+              fan_auto: true,
+              buzzer_enabled: true,
+              buzzer_auto: true,
+            },
           },
         },
         include: {
@@ -234,6 +258,8 @@ export class DeviceController {
         data: { lifecycle_state: LifecycleState.ACTIVE },
       });
 
+      DeviceController.emitLifecycle(device);
+
       await AuditService.log({
         actor_id: req.user!.id,
         action: 'DEVICE_ACTIVATED',
@@ -261,6 +287,8 @@ export class DeviceController {
         where: { id },
         data: { lifecycle_state: targetState },
       });
+
+      DeviceController.emitLifecycle(device);
 
       await AuditService.log({
         actor_id: req.user!.id,
@@ -292,6 +320,8 @@ export class DeviceController {
         data: { lifecycle_state: LifecycleState.SUSPENDED, is_online: false },
       });
 
+      DeviceController.emitLifecycle(device);
+
       await AuditService.log({
         actor_id: req.user!.id,
         action: 'DEVICE_SUSPENDED',
@@ -322,6 +352,8 @@ export class DeviceController {
         data: { lifecycle_state: LifecycleState.ACTIVE },
       });
 
+      DeviceController.emitLifecycle(device);
+
       await AuditService.log({
         actor_id: req.user!.id,
         action: 'DEVICE_UNSUSPENDED',
@@ -346,6 +378,8 @@ export class DeviceController {
         where: { id },
         data: { lifecycle_state: LifecycleState.DECOMMISSIONED, is_online: false },
       });
+
+      DeviceController.emitLifecycle(device);
 
       await AuditService.log({
         actor_id: req.user!.id,
@@ -480,11 +514,13 @@ export class DeviceController {
         return;
       }
 
-      await prisma.$transaction(async (tx) => {
-        await tx.telemetryLog.deleteMany({ where: { device_id: existing.id } });
-        await tx.alert.deleteMany({ where: { device_id: existing.id } });
-        await tx.deviceCommand.deleteMany({ where: { device_id: existing.id } });
-        await tx.device.delete({ where: { id: existing.id } });
+      await MQTTService.withDeactivatedNode(existing, req.user!.id, async () => {
+        await prisma.$transaction(async (tx) => {
+          await tx.telemetryLog.deleteMany({ where: { device_id: existing.id } });
+          await tx.alert.deleteMany({ where: { device_id: existing.id } });
+          await tx.deviceCommand.deleteMany({ where: { device_id: existing.id } });
+          await tx.device.delete({ where: { id: existing.id } });
+        });
       });
 
       MQTTService.clearDeviceDiagnostics(existing.device_code);
@@ -500,11 +536,14 @@ export class DeviceController {
 
       res.status(200).json({
         success: true,
-        message: `Đã xóa vĩnh viễn thiết bị ${existing.device_code}`,
+        message: `Đã tắt và khóa đầu ra, xóa vĩnh viễn node ${existing.device_code}. Đăng ký lại để cho phép hoạt động`,
       });
     } catch (error) {
       console.error('[DeviceController.remove]', error);
-      res.status(500).json({ success: false, message: 'Lỗi khi xóa thiết bị' });
+      res.status(error instanceof DeviceCommandError ? error.statusCode : 500).json({
+        success: false,
+        message: error instanceof DeviceCommandError ? error.message : 'Chưa xóa được node; nếu mạch đã tắt đầu ra, đầu ra vẫn được khóa. Vui lòng thử lại',
+      });
     }
   }
 
@@ -546,163 +585,7 @@ export class DeviceController {
         return;
       }
 
-      // Validate & chuẩn hóa chân GPIO của các thiết bị chuẩn + ngoại vi tùy chọn
-      const SAFE_ESP32_GPIOS = new Set([4, 5, 13, 14, 16, 17, 18, 19, 23, 25, 26, 27, 32, 33, 34, 35, 36, 39]);
-      const SAFE_I2C_GPIOS = new Set([21, 22, ...SAFE_ESP32_GPIOS]);
-      const SAFE_ADC1_GPIOS = new Set([32, 33, 34, 35, 36, 39]);
-      const VALID_TYPES = new Set(['RELAY_OUTPUT', 'DIGITAL_INPUT', 'ANALOG_INPUT']);
-
-      const prevConfig =
-        typeof device.config_json === 'object' && device.config_json !== null
-          ? (device.config_json as Record<string, any>)
-          : {};
-      const mergedPeripherals: Record<string, any> = {
-        ...(typeof prevConfig.peripherals === 'object' && prevConfig.peripherals !== null
-          ? prevConfig.peripherals
-          : {}),
-        ...(typeof configPayload.peripherals === 'object' && configPayload.peripherals !== null
-          ? configPayload.peripherals
-          : {}),
-      };
-
-      const usedGpios = new Set<number>();
-      const pinChecks: { enabled: boolean; gpio: number; allowed: Set<number>; label: string; outputOnlyCheck?: boolean }[] = [
-        {
-          enabled: mergedPeripherals.aht20_enabled !== false,
-          gpio: Number(mergedPeripherals.aht20_sda_gpio ?? 21),
-          allowed: SAFE_I2C_GPIOS,
-          label: 'AHT20 SDA',
-        },
-        {
-          enabled: mergedPeripherals.aht20_enabled !== false,
-          gpio: Number(mergedPeripherals.aht20_scl_gpio ?? 22),
-          allowed: SAFE_I2C_GPIOS,
-          label: 'AHT20 SCL',
-        },
-        {
-          enabled: mergedPeripherals.mq135_enabled !== false,
-          gpio: Number(mergedPeripherals.mq135_gpio ?? 34),
-          allowed: SAFE_ADC1_GPIOS,
-          label: 'MQ-135',
-        },
-        {
-          enabled: mergedPeripherals.door_enabled !== false,
-          gpio: Number(mergedPeripherals.door_gpio ?? 27),
-          allowed: SAFE_ESP32_GPIOS,
-          label: 'Cảm biến cửa',
-        },
-        {
-          enabled: mergedPeripherals.fan_enabled !== false,
-          gpio: Number(mergedPeripherals.fan_gpio ?? 25),
-          allowed: SAFE_ESP32_GPIOS,
-          label: 'Quạt thông gió',
-          outputOnlyCheck: true,
-        },
-        {
-          enabled: mergedPeripherals.buzzer_enabled !== false,
-          gpio: Number(mergedPeripherals.buzzer_gpio ?? 33),
-          allowed: SAFE_ESP32_GPIOS,
-          label: 'Còi báo động',
-          outputOnlyCheck: true,
-        },
-      ];
-
-      for (const check of pinChecks) {
-        if (!check.enabled) continue;
-        if (!check.allowed.has(check.gpio) || (check.outputOnlyCheck && check.gpio >= 34)) {
-          res.status(400).json({
-            success: false,
-            message: `Chân GPIO ${check.gpio} không hợp lệ cho ${check.label}`,
-          });
-          return;
-        }
-        if (usedGpios.has(check.gpio)) {
-          res.status(400).json({
-            success: false,
-            message: `Chân GPIO ${check.gpio} bị trùng lặp giữa các thiết bị`,
-          });
-          return;
-        }
-        usedGpios.add(check.gpio);
-      }
-
-      let sanitizedCustomPeripherals: any[] | undefined = undefined;
-      const customListToValidate =
-        configPayload.custom_peripherals !== undefined
-          ? configPayload.custom_peripherals
-          : prevConfig.custom_peripherals;
-
-      if (configPayload.custom_peripherals !== undefined && !Array.isArray(configPayload.custom_peripherals)) {
-        res.status(400).json({ success: false, message: 'custom_peripherals phải là mảng' });
-        return;
-      }
-
-      if (Array.isArray(customListToValidate)) {
-        if (customListToValidate.length > 8) {
-          res.status(400).json({ success: false, message: 'Tối đa 8 ngoại vi tùy chỉnh trên mỗi node' });
-          return;
-        }
-        const validatedList: any[] = [];
-        for (const item of customListToValidate) {
-          const itemId = typeof item?.id === 'string' ? item.id.trim().slice(0, 32) : '';
-          const itemName = typeof item?.name === 'string' ? item.name.trim().slice(0, 48) : '';
-          const itemType = String(item?.type || '');
-          const gpio = Number(item?.gpio);
-
-          if (!itemId || !itemName || !VALID_TYPES.has(itemType) || !SAFE_ESP32_GPIOS.has(gpio)) {
-            res.status(400).json({
-              success: false,
-              message: `Thông tin ngoại vi không hợp lệ hoặc chân GPIO ${gpio} không được hỗ trợ`,
-            });
-            return;
-          }
-          if (itemType === 'RELAY_OUTPUT' && gpio >= 34) {
-            res.status(400).json({
-              success: false,
-              message: `Chân GPIO ${gpio} chỉ nhận tín hiệu vào (Input-only), không thể dùng làm Relay ngõ ra`,
-            });
-            return;
-          }
-          if (usedGpios.has(gpio)) {
-            res.status(400).json({
-              success: false,
-              message: `Chân GPIO ${gpio} đang được thiết bị khác sử dụng`,
-            });
-            return;
-          }
-          usedGpios.add(gpio);
-          validatedList.push({
-            id: itemId,
-            name: itemName,
-            type: itemType,
-            gpio,
-            active_high: item?.active_high !== false,
-            pull_up: item?.pull_up !== false,
-            unit: typeof item?.unit === 'string' ? item.unit.trim().slice(0, 12) : '',
-          });
-        }
-        if (configPayload.custom_peripherals !== undefined) {
-          sanitizedCustomPeripherals = validatedList;
-        }
-      }
-
-      // Lưu cấu hình vào DB
-      const updatedConfig: Record<string, any> = {
-        ...prevConfig,
-        ...configPayload,
-        peripherals: mergedPeripherals,
-        custom_peripherals:
-          sanitizedCustomPeripherals !== undefined
-            ? sanitizedCustomPeripherals
-            : Array.isArray(prevConfig.custom_peripherals)
-            ? prevConfig.custom_peripherals
-            : [],
-      };
-
-      await prisma.device.update({
-        where: { id: device.id },
-        data: { config_json: updatedConfig },
-      });
+      const updatedConfig = validateDeviceConfig(configPayload, device.config_json);
 
       // Phát lệnh xuống topic grain/devices/{device_code}/cmd
       const cmdId = await MQTTService.publishCommand(
@@ -715,7 +598,7 @@ export class DeviceController {
 
       await AuditService.log({
         actor_id: req.user!.id,
-        action: 'DEVICE_CONFIG_UPDATED',
+        action: 'DEVICE_CONFIG_REQUESTED',
         target_type: 'DEVICE',
         target_id: device.id,
         details_json: { cmd_id: cmdId, configPayload },
@@ -724,10 +607,10 @@ export class DeviceController {
       res.status(200).json({
         success: true,
         message: 'Đã phát lệnh cập nhật cấu hình từ xa tới thiết bị',
-        data: { cmd_id: cmdId, config: updatedConfig },
+        data: { cmd_id: cmdId, status: 'PENDING' },
       });
     } catch (error) {
-      res.status(500).json({ success: false, message: 'Lỗi khi gửi cấu hình từ xa' });
+      res.status(error instanceof DeviceCommandError ? error.statusCode : 500).json({ success: false, message: error instanceof DeviceCommandError ? error.message : 'Lỗi khi gửi cấu hình từ xa' });
     }
   }
 
@@ -813,27 +696,11 @@ export class DeviceController {
           ? undefined
           : 'MANUAL');
 
-      if (resolvedTarget === 'VENTILATION_FAN' && (resolvedControlMode === 'MANUAL' || resolvedControlMode === 'AUTO')) {
-        const prevConfig =
-          typeof device.config_json === 'object' && device.config_json !== null
-            ? (device.config_json as Record<string, any>)
-            : {};
-        const prevPeripherals =
-          typeof prevConfig.peripherals === 'object' && prevConfig.peripherals !== null
-            ? prevConfig.peripherals
-            : {};
-        await prisma.device.update({
-          where: { id: device.id },
-          data: {
-            config_json: {
-              ...prevConfig,
-              peripherals: {
-                ...prevPeripherals,
-                fan_auto: resolvedControlMode === 'AUTO',
-              },
-            },
-          },
-        });
+      if (!['VENTILATION_FAN', 'ALARM_BUZZER', 'CUSTOM_PERIPHERAL'].includes(resolvedTarget) ||
+          !['TURN_ON', 'TURN_OFF', 'SET_AUTO'].includes(resolvedAction) ||
+          (resolvedAction === 'SET_AUTO' && resolvedTarget !== 'VENTILATION_FAN') ||
+          (resolvedControlMode !== undefined && !['AUTO', 'MANUAL'].includes(resolvedControlMode))) {
+        throw new DeviceCommandError('Target/action/control_mode không hợp lệ');
       }
 
       // Phát lệnh xuống topic grain/devices/{device_code}/cmd
@@ -865,7 +732,7 @@ export class DeviceController {
         data: { cmd_id: cmdId, status: 'PENDING' },
       });
     } catch (error) {
-      res.status(500).json({ success: false, message: 'Lỗi khi gửi lệnh điều khiển' });
+      res.status(error instanceof DeviceCommandError ? error.statusCode : 500).json({ success: false, message: error instanceof DeviceCommandError ? error.message : 'Lỗi khi gửi lệnh điều khiển' });
     }
   }
 }

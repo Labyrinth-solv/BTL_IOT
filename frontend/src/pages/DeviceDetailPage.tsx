@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
+import { waitForCommandAck } from '../services/socket';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import {
@@ -14,7 +15,7 @@ import {
 } from '../types';
 import { RiskBadge } from '../components/RiskBadge';
 import { LifecycleBadge } from '../components/LifecycleBadge';
-import { SensorHealthPanel } from '../components/SensorHealthPanel';
+import { PeripheralPanel, type PeripheralItem } from '../components/PeripheralPanel';
 import {
   PERIPHERAL_CATALOG,
   DEFAULT_PERIPHERAL_CONFIG,
@@ -22,6 +23,7 @@ import {
   PeripheralDefinition,
   CreatePeripheralKind,
   getAvailableGpios,
+  ESP32_SAFE_GPIOS,
   getAvailableI2cPairs,
   getPeripheralPinLabel,
 } from '../utils/peripherals';
@@ -48,13 +50,31 @@ import {
   Send,
   Volume2,
   Cpu,
-  Trash2,
   Plus,
   Power,
   Gauge,
   ToggleRight,
   X,
 } from 'lucide-react';
+
+type MetricStatus = 'SAFE' | 'WARNING' | 'CRITICAL' | 'ERROR' | 'NO_DATA';
+
+const METRIC_STYLES: Record<MetricStatus, { card: string; text: string; badge: string; label: string }> = {
+  SAFE: { card: 'bg-slate-50 border-slate-200', text: 'text-slate-900', badge: 'bg-white text-slate-600 border-slate-200', label: 'Bình thường' },
+  WARNING: { card: 'bg-amber-50 border-amber-300', text: 'text-amber-700', badge: 'bg-amber-100 text-amber-800 border-amber-300', label: 'Cảnh báo' },
+  CRITICAL: { card: 'bg-rose-50 border-rose-300', text: 'text-rose-700', badge: 'bg-rose-100 text-rose-800 border-rose-300', label: 'Nguy hiểm' },
+  ERROR: { card: 'bg-rose-50/70 border-rose-200', text: 'text-rose-700', badge: 'bg-white text-rose-700 border-rose-200', label: 'Lỗi cảm biến' },
+  NO_DATA: { card: 'bg-slate-50 border-slate-200', text: 'text-slate-400', badge: 'bg-white text-slate-500 border-slate-200', label: 'Chờ dữ liệu' },
+};
+
+function getMetricStatus(value: number | null, warn: number, critical: number, healthy: boolean, online: boolean): MetricStatus {
+  if (!online) return 'NO_DATA';
+  if (!healthy) return 'ERROR';
+  if (value === null || !Number.isFinite(value)) return 'NO_DATA';
+  if (value >= critical) return 'CRITICAL';
+  if (value >= warn) return 'WARNING';
+  return 'SAFE';
+}
 
 export const DeviceDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -64,6 +84,9 @@ export const DeviceDetailPage: React.FC = () => {
 
   const [device, setDevice] = useState<Device | null>(null);
   const [telemetryHistory, setTelemetryHistory] = useState<TelemetryLog[]>([]);
+  const historyInitializedFor = useRef<string | null>(null);
+  const sessionWasReset = useRef(false);
+  const lastChartSample = useRef<string>('');
   const [commands, setCommands] = useState<DeviceCommand[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -81,7 +104,7 @@ export const DeviceDetailPage: React.FC = () => {
   );
   const [customPeripherals, setCustomPeripherals] = useState<CustomPeripheralConfig[]>([]);
   const [isConfiguring, setIsConfiguring] = useState(false);
-  const [showAddPeripheralMenu, setShowAddPeripheralMenu] = useState(false);
+  const [isControlling, setIsControlling] = useState(false);
 
   // Modal tạo thiết bị ngoại vi mới hoàn toàn (thiết bị chuẩn hoặc GPIO tùy chọn)
   const [isCreateCustomOpen, setIsCreateCustomOpen] = useState(false);
@@ -97,7 +120,12 @@ export const DeviceDetailPage: React.FC = () => {
       const res = await api.getDeviceById(id);
       if (res.success && res.data) {
         setDevice(res.data);
-        if (res.data.telemetry_logs) setTelemetryHistory([...res.data.telemetry_logs].reverse());
+        // Load the initial history once. Refreshing config/commands must not restore
+        // pre-disconnect samples after the live chart has been reset.
+        if (historyInitializedFor.current !== id) {
+          setTelemetryHistory(res.data.is_online ? [...(res.data.telemetry_logs || [])].reverse() : []);
+          historyInitializedFor.current = id;
+        }
         if (res.data.commands) setCommands(res.data.commands);
 
         const cfg = res.data.config_json || {};
@@ -121,38 +149,60 @@ export const DeviceDetailPage: React.FC = () => {
   };
 
   useEffect(() => {
+    historyInitializedFor.current = null;
+    sessionWasReset.current = false;
+    lastChartSample.current = '';
+    setTelemetryHistory([]);
     fetchDeviceData();
   }, [id]);
 
+  const selectedCode = device?.device_code;
+  const selectedUpdate = selectedCode ? latestTelemetry[selectedCode] : undefined;
+  const selectedStatus = selectedCode ? deviceStatus[selectedCode] : undefined;
+  const selectedOnline = selectedStatus
+    ? selectedStatus.is_online ?? selectedStatus.state === 'ONLINE'
+    : device?.is_online === true;
   useEffect(() => {
-    if (!device) return;
-    const update = latestTelemetry[device.device_code];
-    if (update) {
-      setTelemetryHistory((prev) => {
-        const item: TelemetryLog = {
-          id: Date.now(),
-          device_id: device.id,
-          msg_id: `msg_${Date.now()}`,
-          temperature: update.temperature,
-          humidity_air: update.humidity_air,
-          gas_ppm: update.gas_ppm,
-          estimated_emc: update.estimated_emc,
-          fan_state: update.fan_state === 'ON',
-          risk_level: update.risk_level,
-          recorded_at: new Date(update.timestamp).toISOString(),
-        };
-        return [...prev.slice(-29), item];
-      });
+    if (selectedCode && !selectedOnline) {
+      sessionWasReset.current = true;
+      lastChartSample.current = '';
+      setTelemetryHistory([]);
     }
-  }, [latestTelemetry, device]);
-
+  }, [selectedCode, selectedOnline]);
   useEffect(() => {
-    Object.values(latestAck).forEach((ack: any) => {
-      setCommands((prev) =>
-        prev.map((cmd) => (cmd.cmd_id === ack.cmd_id ? { ...cmd, status: ack.status } : cmd))
-      );
-    });
-  }, [latestAck]);
+    if (!selectedOnline || !selectedUpdate || !selectedCode || !id) return;
+    const sampleKey = `${selectedCode}:${selectedUpdate.timestamp}`;
+    if (lastChartSample.current === sampleKey) return;
+    lastChartSample.current = sampleKey;
+    const item: TelemetryLog = {
+      id: sampleKey, device_id: id, msg_id: sampleKey,
+      temperature: selectedUpdate.temperature, humidity_air: selectedUpdate.humidity_air,
+      gas_ppm: selectedUpdate.gas_ppm, estimated_emc: selectedUpdate.estimated_emc,
+      fan_state: selectedUpdate.fan_state === 'ON', risk_level: selectedUpdate.risk_level,
+      recorded_at: new Date(selectedUpdate.timestamp).toISOString(),
+    };
+    setTelemetryHistory(prev => [...prev.slice(-29), item]);
+  }, [selectedUpdate, selectedCode, selectedOnline, id]);
+
+  const handledAckIds = useRef(new Set(Object.keys(latestAck)));
+  useEffect(() => {
+    const acks = (Object.values(latestAck) as any[]).filter(ack => !handledAckIds.current.has(ack.cmd_id));
+    acks.forEach(ack => handledAckIds.current.add(ack.cmd_id));
+    setCommands(prev => prev.map(cmd => {
+      const ack = latestAck[cmd.cmd_id];
+      return ack ? { ...cmd, status: ack.status } : cmd;
+    }));
+    const ack = [...acks].reverse().find(a => a.device_id === selectedCode && a.status === 'SUCCESS' && a.config_json);
+    if (ack) {
+      setDevice(prev => prev ? { ...prev, config_json: ack.config_json,
+        control_mode: ack.current_actuators?.control_mode ?? prev.control_mode,
+        fan_state: ack.current_actuators?.fan_state ?? prev.fan_state,
+        buzzer_state: ack.current_actuators?.buzzer_state ?? prev.buzzer_state,
+      } : prev);
+      setPeripherals(normalizePeripherals(ack.config_json.peripherals));
+      setCustomPeripherals(ack.config_json.custom_peripherals || []);
+    }
+  }, [latestAck, selectedCode]);
 
   const applyPeripheralsUpdate = async (
     nextPeripherals: Required<PeripheralConfig>,
@@ -165,23 +215,6 @@ export const DeviceDetailPage: React.FC = () => {
       return;
     }
 
-    const prevPeripherals = peripherals;
-    const prevCustom = customPeripherals;
-    setPeripherals(nextPeripherals);
-    setCustomPeripherals(nextCustom);
-    setDevice((prev) =>
-      prev
-        ? {
-            ...prev,
-            config_json: {
-              ...(prev.config_json || {}),
-              peripherals: nextPeripherals,
-              custom_peripherals: nextCustom,
-            },
-          }
-        : prev
-    );
-
     setIsConfiguring(true);
     try {
       const res = await api.updateConfig(device.id, {
@@ -189,11 +222,11 @@ export const DeviceDetailPage: React.FC = () => {
         custom_peripherals: nextCustom,
       });
       if (res.success) {
+        await waitForCommandAck(res.data?.cmd_id);
+        await fetchDeviceData();
         showToast(successMsg, 'success');
       }
     } catch (err: any) {
-      setPeripherals(prevPeripherals);
-      setCustomPeripherals(prevCustom);
       showToast(err.message || 'Lỗi cập nhật thiết bị ngoại vi', 'error');
     } finally {
       setIsConfiguring(false);
@@ -206,15 +239,6 @@ export const DeviceDetailPage: React.FC = () => {
       [item.enabledKey]: false,
     };
     applyPeripheralsUpdate(next, customPeripherals, `Đã xóa "${item.shortName}" khỏi node.`);
-  };
-
-  const handleAddPeripheral = (item: PeripheralDefinition) => {
-    const next: Required<PeripheralConfig> = {
-      ...peripherals,
-      [item.enabledKey]: true,
-    };
-    setShowAddPeripheralMenu(false);
-    applyPeripheralsUpdate(next, customPeripherals, `Đã thêm lại "${item.shortName}" vào node.`);
   };
 
   const handleToggleAutoMode = (item: PeripheralDefinition) => {
@@ -232,17 +256,11 @@ export const DeviceDetailPage: React.FC = () => {
   };
 
   const openCreateCustomModal = () => {
-    const initialType: CreatePeripheralKind = !peripherals.aht20_enabled
-      ? 'BUILTIN_AHT20'
-      : !peripherals.mq135_enabled
-      ? 'BUILTIN_MQ135'
-      : !peripherals.door_enabled
-      ? 'BUILTIN_DOOR'
-      : !peripherals.fan_enabled
-      ? 'BUILTIN_FAN'
-      : !peripherals.buzzer_enabled
-      ? 'BUILTIN_BUZZER'
-      : 'RELAY_OUTPUT';
+    const builtinKinds: Record<PeripheralDefinition['id'], CreatePeripheralKind> = {
+      aht20: 'BUILTIN_AHT20', mq135: 'BUILTIN_MQ135', door: 'BUILTIN_DOOR', fan: 'BUILTIN_FAN', buzzer: 'BUILTIN_BUZZER',
+    };
+    const firstRemoved = customPeripherals.length >= 8 ? removedPeripherals[0] : undefined;
+    const initialType: CreatePeripheralKind = firstRemoved ? builtinKinds[firstRemoved.id] : 'RELAY_OUTPUT';
 
     setCpName('');
     setCpType(initialType);
@@ -352,7 +370,7 @@ export const DeviceDetailPage: React.FC = () => {
       type: cpType,
       gpio: cpGpio,
       active_high: true,
-      pull_up: true,
+      pull_up: ESP32_SAFE_GPIOS.find(pin => pin.gpio === cpGpio)?.hasInternalPullup ?? false,
       ...(cpType === 'ANALOG_INPUT' ? { unit: cpUnit.trim() || '%' } : {}),
     };
 
@@ -373,6 +391,7 @@ export const DeviceDetailPage: React.FC = () => {
   const handleControlCustomRelay = async (cp: CustomPeripheralConfig, currentOn: boolean) => {
     if (!device || isViewer) return;
     const action = currentOn ? 'TURN_OFF' : 'TURN_ON';
+    setIsControlling(true);
     try {
       const res = await api.controlActuator(device.id, {
         target: 'CUSTOM_PERIPHERAL',
@@ -380,13 +399,13 @@ export const DeviceDetailPage: React.FC = () => {
         action,
       });
       if (res.success) {
-        showToast(
-          `Đã gửi lệnh ${action === 'TURN_ON' ? 'BẬT' : 'TẮT'} "${cp.name}".`,
-          'warning'
-        );
+        await waitForCommandAck(res.data?.cmd_id);
+        showToast(`Thiết bị đã xác nhận ${action === 'TURN_ON' ? 'BẬT' : 'TẮT'} "${cp.name}".`, 'success');
       }
     } catch (err: any) {
       showToast(err.message || `Lỗi điều khiển ${cp.name}`, 'error');
+    } finally {
+      setIsControlling(false);
     }
   };
 
@@ -417,7 +436,8 @@ export const DeviceDetailPage: React.FC = () => {
       }
       const res = await api.updateConfig(device.id, payload);
       if (res.success) {
-        showToast('Đã lưu ngưỡng cảnh báo và đồng bộ xuống ESP32!', 'success');
+        await waitForCommandAck(res.data?.cmd_id);
+        showToast('ESP32 đã xác nhận áp dụng cấu hình!', 'success');
         fetchDeviceData();
       }
     } catch (err: any) {
@@ -436,6 +456,7 @@ export const DeviceDetailPage: React.FC = () => {
     const isFan = target === 'VENTILATION_FAN';
     const label = isFan ? 'quạt thông gió' : 'còi báo động';
 
+    setIsControlling(true);
     try {
       const res = await api.controlActuator(device.id, {
         target,
@@ -443,33 +464,20 @@ export const DeviceDetailPage: React.FC = () => {
         ...(isFan ? { control_mode: 'MANUAL' } : {}),
       });
       if (res.success) {
-        if (isFan) {
-          setPeripherals((prev) => ({ ...prev, fan_auto: false }));
-          setDevice((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  control_mode: 'MANUAL',
-                  config_json: {
-                    ...(prev.config_json || {}),
-                    peripherals: {
-                      ...((prev.config_json as any)?.peripherals || {}),
-                      fan_auto: false,
-                    },
-                  },
-                }
-              : prev
-          );
-        }
-        showToast(`Đã gửi lệnh ${action === 'TURN_ON' ? 'BẬT' : 'TẮT'} ${label}.`, 'warning');
+        await waitForCommandAck(res.data?.cmd_id);
+        await fetchDeviceData();
+        showToast(`Thiết bị đã xác nhận ${action === 'TURN_ON' ? 'BẬT' : 'TẮT'} ${label}.`, 'success');
       }
     } catch (err: any) {
       showToast(err.message || `Lỗi gửi lệnh điều khiển ${label}`, 'error');
+    } finally {
+      setIsControlling(false);
     }
   };
 
   const handleSwitchFanAuto = async () => {
     if (!device || isViewer) return;
+    setIsControlling(true);
     try {
       const res = await api.controlActuator(device.id, {
         target: 'VENTILATION_FAN',
@@ -477,26 +485,14 @@ export const DeviceDetailPage: React.FC = () => {
         control_mode: 'AUTO',
       });
       if (res.success) {
-        setPeripherals((prev) => ({ ...prev, fan_auto: true }));
-        setDevice((prev) =>
-          prev
-            ? {
-                ...prev,
-                control_mode: 'AUTO',
-                config_json: {
-                  ...(prev.config_json || {}),
-                  peripherals: {
-                    ...((prev.config_json as any)?.peripherals || {}),
-                    fan_auto: true,
-                  },
-                },
-              }
-            : prev
-        );
-        showToast('Đã chuyển quạt thông gió sang chế độ Tự động.', 'success');
+        await waitForCommandAck(res.data?.cmd_id);
+        await fetchDeviceData();
+        showToast('Thiết bị đã xác nhận chế độ Tự động.', 'success');
       }
     } catch (err: any) {
       showToast(err.message || 'Không chuyển được quạt về chế độ tự động', 'error');
+    } finally {
+      setIsControlling(false);
     }
   };
 
@@ -508,12 +504,13 @@ export const DeviceDetailPage: React.FC = () => {
     );
   }
 
-  const validAhtLogs = telemetryHistory.filter((t) => !(t.temperature === 0 && t.humidity_air === 0));
+  const visibleHistory = selectedOnline ? telemetryHistory : [];
+  const validAhtLogs = visibleHistory.filter((t) => !(t.temperature === 0 && t.humidity_air === 0));
   const temps = validAhtLogs.map((t) => t.temperature);
   const rhs = validAhtLogs.map((t) => t.humidity_air);
   const emcs = validAhtLogs.map((t) => t.estimated_emc);
 
-  const validGasLogs = telemetryHistory.filter((t) => typeof t.gas_ppm === 'number' && t.gas_ppm > 0);
+  const validGasLogs = visibleHistory.filter((t) => typeof t.gas_ppm === 'number' && t.gas_ppm > 0);
   const gases = validGasLogs.map((t) => t.gas_ppm);
 
   const avgTemp = temps.length ? (temps.reduce((a, b) => a + b, 0) / temps.length).toFixed(1) : '--';
@@ -530,44 +527,125 @@ export const DeviceDetailPage: React.FC = () => {
   const maxGas = gases.length ? Math.round(Math.max(...gases)) : '--';
   const minGas = gases.length ? Math.round(Math.min(...gases)) : '--';
 
-  const wsData = latestTelemetry[device.device_code];
-  const wsStatus = deviceStatus[device.device_code];
-  const isOnline = wsStatus ? wsStatus.state !== 'OFFLINE' : device.is_online;
-  const latestLog = telemetryHistory[telemetryHistory.length - 1];
-  const sensorHealth = wsData?.sensor_health ?? device.sensor_health;
-  const doorOpen = wsData?.door_open ?? device.door_open;
+  const isOnline = selectedOnline;
+  const liveLifecycle = (deviceStatus[device.device_code]?.lifecycle_state as Device['lifecycle_state']) ?? device.lifecycle_state;
+  const wsData = isOnline ? latestTelemetry[device.device_code] : undefined;
+  const latestLog = visibleHistory[visibleHistory.length - 1];
+  const canUseSnapshot = isOnline && !sessionWasReset.current;
+  const sensorHealth = wsData?.sensor_health ?? (canUseSnapshot ? device.sensor_health : null);
+  const doorOpen = wsData?.door_open ?? (canUseSnapshot ? device.door_open : null);
   const currentRisk = wsData?.risk_level ?? latestLog?.risk_level ?? 'SAFE';
   const currentFanState = isOnline
     ? wsData
       ? wsData.fan_state === 'ON'
-      : latestLog?.fan_state ?? false
+      : canUseSnapshot && device.fan_state === 'ON'
     : false;
   const currentFanMode =
     wsData?.control_mode ??
     device.control_mode ??
     (peripherals.fan_auto !== false ? 'AUTO' : 'MANUAL');
-  const currentBuzzerState = isOnline && wsData ? wsData.buzzer_state === 'ON' : false;
+  const fanStateKnown = Boolean(wsData?.fan_state ?? (canUseSnapshot ? device.fan_state : null));
+  const buzzerStateKnown = Boolean(wsData?.buzzer_state ?? (canUseSnapshot ? device.buzzer_state : null));
+  const currentBuzzerState = isOnline && (wsData?.buzzer_state ?? (canUseSnapshot ? device.buzzer_state : null)) === 'ON';
   const runtimeCustomList: CustomPeripheralRuntimeState[] =
-    wsData?.custom_peripherals ?? device.custom_peripherals ?? [];
+    isOnline ? wsData?.custom_peripherals ?? (canUseSnapshot ? device.custom_peripherals ?? [] : []) : [];
 
   const ahtEnabled = peripherals.aht20_enabled !== false;
   const mqEnabled = peripherals.mq135_enabled !== false;
-  const fanEnabled = peripherals.fan_enabled !== false;
-  const buzzerEnabled = peripherals.buzzer_enabled !== false;
 
   const aht20Ok = !ahtEnabled || (sensorHealth?.aht20 ? sensorHealth.aht20.ok : true);
   const mq135Ok = !mqEnabled || (sensorHealth?.mq135 ? sensorHealth.mq135.ok : true);
-  const liveTemp = wsData ? wsData.temperature : latestLog?.temperature ?? null;
-  const liveRH = wsData ? wsData.humidity_air : latestLog?.humidity_air ?? null;
-  const liveEMC = wsData ? wsData.estimated_emc : latestLog?.estimated_emc ?? null;
-  const liveGas = wsData ? wsData.gas_ppm : latestLog?.gas_ppm ?? null;
+  const liveTemp = isOnline ? wsData ? wsData.temperature : latestLog?.temperature ?? null : null;
+  const liveRH = isOnline ? wsData ? wsData.humidity_air : latestLog?.humidity_air ?? null : null;
+  const liveEMC = isOnline ? wsData ? wsData.estimated_emc : latestLog?.estimated_emc ?? null : null;
+  const liveGas = isOnline ? wsData ? wsData.gas_ppm : latestLog?.gas_ppm ?? null : null;
+
+  // Use confirmed device thresholds, so unsaved form edits never change live alert colors.
+  const cfg = device.config_json || {};
+  const metricCards = [
+    { id: 'temperature', sensor: 'aht20', label: 'Nhiệt độ', icon: Thermometer, iconClass: 'text-amber-500', enabled: ahtEnabled,
+      value: liveTemp, unit: '°C', healthy: aht20Ok, warn: cfg.temp_warn_threshold ?? 25, critical: cfg.temp_crit_threshold ?? 28,
+      summary: `TB: ${avgTemp}°C (${minTemp}–${maxTemp}°C)` },
+    { id: 'humidity', sensor: 'aht20', label: 'Độ ẩm không khí', icon: Droplets, iconClass: 'text-sky-500', enabled: ahtEnabled,
+      value: liveRH, unit: '%RH', healthy: aht20Ok, warn: cfg.hum_warn_threshold ?? 65, critical: cfg.hum_crit_threshold ?? 70,
+      summary: `TB: ${avgRH}% (${minRH}–${maxRH}%)` },
+    { id: 'emc', sensor: 'aht20', label: 'Độ ẩm hạt (EMC)', icon: Wind, iconClass: 'text-emerald-600', enabled: ahtEnabled,
+      value: liveEMC, unit: '%MC', healthy: aht20Ok, warn: cfg.emc_warn_threshold ?? 14, critical: cfg.emc_crit_threshold ?? 14.8,
+      summary: `TB: ${avgEMC}%` },
+    { id: 'gas', sensor: 'mq135', label: 'Khí Gas (MQ-135)', icon: Flame, iconClass: 'text-purple-600', enabled: mqEnabled,
+      value: liveGas, unit: 'ppm', healthy: mq135Ok, warn: cfg.gas_warn_threshold ?? 600, critical: cfg.gas_crit_threshold ?? 700,
+      summary: `TB: ${avgGas} ppm (${minGas}–${maxGas} ppm)` },
+  ].filter(metric => metric.enabled).map(metric => ({
+    ...metric, status: getMetricStatus(metric.value, metric.warn, metric.critical, metric.healthy, isOnline),
+  }));
 
   const attachedPeripherals = PERIPHERAL_CATALOG.filter((p) => peripherals[p.enabledKey] !== false);
   const removedPeripherals = PERIPHERAL_CATALOG.filter((p) => peripherals[p.enabledKey] === false);
   const availableI2cPairsForModal = getAvailableI2cPairs(peripherals, customPeripherals);
   const availableGpiosForModal = getAvailableGpios(cpType, peripherals, customPeripherals);
 
-  const chartData = telemetryHistory.map((item) => ({
+  const builtinItems = attachedPeripherals.map((item): PeripheralItem => {
+    const base: PeripheralItem = {
+      id: `builtin-${item.id}`, name: item.shortName, pin: getPeripheralPinLabel(item.id, peripherals),
+      icon: item.id === 'aht20' ? Thermometer : item.id === 'mq135' ? Flame : item.id === 'door' ? ToggleRight : item.id === 'fan' ? Fan : Volume2,
+      status: 'Ngoại tuyến', tone: 'neutral', onRemove: () => handleRemovePeripheral(item),
+    };
+    if (item.id === 'aht20' || item.id === 'mq135') {
+      const metrics = metricCards.filter(metric => metric.sensor === item.id);
+      const status = (['ERROR', 'CRITICAL', 'WARNING', 'SAFE', 'NO_DATA'] as MetricStatus[])
+        .find(level => metrics.some(metric => metric.status === level)) || 'NO_DATA';
+      const health = item.id === 'aht20' ? sensorHealth?.aht20 : sensorHealth?.mq135;
+      return { ...base,
+        pin: `${base.pin}${isOnline && health?.status === 'SIMULATED' ? ' · Mô phỏng' : ''}`,
+        status: !isOnline ? 'Ngoại tuyến' : METRIC_STYLES[status].label,
+        tone: status === 'CRITICAL' || status === 'ERROR' ? 'danger' : status === 'WARNING' ? 'warning' : status === 'SAFE' ? 'success' : 'neutral',
+        note: !isOnline ? undefined : status === 'ERROR' ? health?.message || 'Chưa nhận được tín hiệu cảm biến.' :
+          metrics.filter(metric => metric.status === 'WARNING' || metric.status === 'CRITICAL')
+            .map(metric => `${metric.label}: ${metric.value} ${metric.unit}`).join(' · ') || undefined,
+      };
+    }
+    if (item.id === 'door') return { ...base,
+      status: !isOnline ? 'Ngoại tuyến' : typeof doorOpen !== 'boolean' ? '--' : doorOpen ? 'Đang mở' : 'Đang đóng',
+      tone: !isOnline || typeof doorOpen !== 'boolean' ? 'neutral' : doorOpen ? 'warning' : 'success',
+    };
+    const isFan = item.id === 'fan';
+    const known = isFan ? fanStateKnown : buzzerStateKnown;
+    const on = isFan ? currentFanState : currentBuzzerState;
+    const auto = isFan ? currentFanMode === 'AUTO' : peripherals.buzzer_auto;
+    return { ...base,
+      status: !isOnline ? 'Ngoại tuyến' : !known ? 'Chờ trạng thái' : on ? 'Đang bật' : 'Đang tắt',
+      tone: isOnline && known && on ? 'success' : 'neutral',
+      mode: auto ? 'Tự động' : 'Thủ công',
+      action: { label: on ? 'Tắt' : 'Bật', disabled: isViewer || !known,
+        onClick: () => handleControlActuator(isFan ? 'VENTILATION_FAN' : 'ALARM_BUZZER', on) },
+      auto: isAdmin ? { checked: auto, disabled: false, onChange: () => handleToggleAutoMode(item) } : undefined,
+      autoAction: isFan && !auto && !isViewer && !isAdmin ? handleSwitchFanAuto : undefined,
+    };
+  });
+  const customItems = customPeripherals.map((cp): PeripheralItem => {
+    const live = runtimeCustomList.find(value => value.id === cp.id);
+    const known = isOnline && live !== undefined;
+    const relay = cp.type === 'RELAY_OUTPUT';
+    const analog = cp.type === 'ANALOG_INPUT';
+    const on = live?.state === 'ON' || live?.state === 'ACTIVE' || live?.value === 1;
+    const lowSignal = known && analog && live.raw_adc !== undefined && live.raw_adc < 25;
+    return {
+      id: `custom-${cp.id}`, name: cp.name,
+      pin: `GPIO ${cp.gpio} · ${relay ? 'Relay' : analog ? 'Analog' : 'Digital'}`,
+      icon: relay ? Power : analog ? Gauge : ToggleRight,
+      status: !isOnline ? 'Ngoại tuyến' : !known ? '--' : analog ? `${live.value ?? '--'} ${cp.unit || '%'}` : relay ? on ? 'Đang bật' : 'Đang tắt' : on ? 'Kích hoạt' : 'Bình thường',
+      tone: !known || (relay && !on) ? 'neutral' : lowSignal || (!relay && !analog && on) ? 'warning' : 'success',
+      note: lowSignal ? 'Tín hiệu analog thấp' : undefined,
+      action: relay ? { label: on ? 'Tắt' : 'Bật', disabled: isViewer || !known, onClick: () => handleControlCustomRelay(cp, on) } : undefined,
+      onRemove: () => handleRemoveCustomPeripheral(cp),
+    };
+  });
+  const sensorItems = [...builtinItems.filter(item => attachedPeripherals.find(p => `builtin-${p.id}` === item.id)?.category === 'SENSOR'),
+    ...customItems.filter(item => customPeripherals.find(cp => `custom-${cp.id}` === item.id)?.type !== 'RELAY_OUTPUT')];
+  const actuatorItems = [...builtinItems.filter(item => attachedPeripherals.find(p => `builtin-${p.id}` === item.id)?.category === 'ACTUATOR'),
+    ...customItems.filter(item => customPeripherals.find(cp => `custom-${cp.id}` === item.id)?.type === 'RELAY_OUTPUT')];
+
+  const chartData = visibleHistory.map((item) => ({
     time: new Date(item.recorded_at).toLocaleTimeString('vi-VN', {
       hour: '2-digit',
       minute: '2-digit',
@@ -598,7 +676,7 @@ export const DeviceDetailPage: React.FC = () => {
     <div className="space-y-6">
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 min-w-0">
           <button
             onClick={() => navigate('/')}
             className="p-2 rounded-xl bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 shadow-sm transition-colors"
@@ -606,16 +684,16 @@ export const DeviceDetailPage: React.FC = () => {
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-2.5 flex-wrap">
-              <h1 className="text-xl font-bold text-slate-900">{device.name}</h1>
-              <LifecycleBadge state={device.lifecycle_state} />
-              {isOnline ? (
+              <h1 className="text-xl font-bold text-slate-900 break-words">{device.name}</h1>
+              <LifecycleBadge state={liveLifecycle} />
+              {isOnline && (wsData || latestLog) ? (
                 <RiskBadge risk={currentRisk} />
-              ) : (
+              ) : !isOnline && liveLifecycle === 'OFFLINE' ? null : (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
                   <span className="w-2 h-2 rounded-full bg-slate-400" />
-                  Ngoại tuyến
+                  {isOnline ? 'Chờ dữ liệu' : 'Ngoại tuyến'}
                 </span>
               )}
             </div>
@@ -625,433 +703,10 @@ export const DeviceDetailPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          {fanEnabled && (
-            <>
-              <button
-                onClick={() => handleControlActuator('VENTILATION_FAN', currentFanState)}
-                disabled={!isOnline || isViewer}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
-                  !isOnline || isViewer
-                    ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                    : currentFanState
-                    ? 'bg-amber-500 text-white border-amber-500 shadow-sm cursor-pointer'
-                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 cursor-pointer'
-                }`}
-              >
-                <Fan className={`w-4 h-4 ${isOnline && currentFanState ? 'animate-spin' : ''}`} />
-                <span>
-                  {!isOnline
-                    ? 'Quạt: Ngoại tuyến'
-                    : `Quạt: ${currentFanState ? 'Đang bật' : 'Đang tắt'} (${
-                        currentFanMode === 'MANUAL' ? 'Thủ công' : 'Tự động'
-                      })`}
-                </span>
-              </button>
-
-              {isOnline && currentFanMode === 'MANUAL' && !isViewer && (
-                <button
-                  type="button"
-                  onClick={handleSwitchFanAuto}
-                  className="px-3 py-2 rounded-xl text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition cursor-pointer"
-                >
-                  Bật Tự động
-                </button>
-              )}
-            </>
-          )}
-
-          {buzzerEnabled && (
-            <button
-              onClick={() => handleControlActuator('ALARM_BUZZER', currentBuzzerState)}
-              disabled={!isOnline || isViewer}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
-                !isOnline || isViewer
-                  ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                  : currentBuzzerState
-                  ? 'bg-rose-600 text-white border-rose-600 shadow-sm cursor-pointer'
-                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 cursor-pointer'
-              }`}
-            >
-              <Volume2
-                className={`w-4 h-4 ${
-                  !isOnline
-                    ? 'text-slate-400'
-                    : currentBuzzerState
-                    ? 'animate-bounce'
-                    : 'text-rose-500'
-                }`}
-              />
-              <span>
-                {!isOnline
-                  ? 'Còi: Ngoại tuyến'
-                  : currentBuzzerState
-                  ? 'Còi đang kêu (Tắt)'
-                  : 'Bật còi báo động'}
-              </span>
-            </button>
-          )}
-        </div>
       </div>
-
-      {/* Quản Lý Thiết Bị Ngoại Vi (Gắn sẵn + Tạo mới tùy chọn GPIO) */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-emerald-50 text-emerald-700">
-              <Cpu className="w-4 h-4" />
-            </div>
-            <div>
-              <h3 className="font-bold text-slate-900 text-sm">
-                Thiết bị ngoại vi &amp; Cảm biến ({attachedPeripherals.length + customPeripherals.length})
-              </h3>
-              <p className="text-xs text-slate-500">
-                {isAdmin
-                  ? 'Xóa hoặc thêm lại cảm biến/quạt/còi, hoặc tạo thiết bị ngoại vi mới gắn vào chân GPIO trên ESP32.'
-                  : 'Danh sách cảm biến và thiết bị đang gắn trên node (Chỉ Chủ kho mới được thêm/xóa ngoại vi).'}
-              </p>
-            </div>
-          </div>
-
-          {isAdmin && (
-            <div className="flex flex-wrap items-center gap-2">
-              {removedPeripherals.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setShowAddPeripheralMenu((prev) => !prev)}
-                  disabled={isConfiguring}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-white hover:bg-slate-50 text-emerald-700 border border-emerald-200 shadow-sm transition disabled:opacity-50"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Thêm lại mặc định ({removedPeripherals.length})</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={openCreateCustomModal}
-                disabled={isConfiguring || customPeripherals.length >= 8}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition disabled:opacity-50"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Tạo ngoại vi mới</span>
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Khung chọn thêm lại thiết bị mặc định đã xóa */}
-        {isAdmin && showAddPeripheralMenu && removedPeripherals.length > 0 && (
-          <div className="p-4 rounded-xl bg-emerald-50/60 border border-emerald-200 space-y-3">
-            <div className="text-xs font-semibold text-emerald-900">
-              Chọn thiết bị mặc định muốn thêm lại:
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-              {removedPeripherals.map((item) => (
-                <div
-                  key={item.id}
-                  className="bg-white border border-emerald-200 rounded-xl p-3 flex items-center justify-between gap-2"
-                >
-                  <div>
-                    <div className="text-xs font-bold text-slate-800">{item.shortName}</div>
-                    <div className="text-[11px] text-slate-500 mt-0.5">{item.description}</div>
-                    <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-semibold">
-                      <Cpu className="w-3 h-3 text-slate-500" />
-                      Chân: {getPeripheralPinLabel(item.id, peripherals)}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={isConfiguring}
-                    onClick={() => handleAddPeripheral(item)}
-                    className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    Thêm
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Danh sách ngoại vi ĐANG GẮN (mặc định + tạo mới) */}
-        {attachedPeripherals.length === 0 && customPeripherals.length === 0 ? (
-          <div className="p-6 rounded-xl border border-dashed border-slate-300 bg-slate-50 text-center text-xs text-slate-500">
-            Node hiện chưa có cảm biến hay thiết bị ngoại vi nào. Bấm &ldquo;Tạo ngoại vi mới&rdquo; hoặc &ldquo;Thêm lại mặc định&rdquo; ở trên.
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {attachedPeripherals.map((item) => {
-              let connLabel = 'Mạch ngoại tuyến';
-              let connClass = 'bg-slate-100 text-slate-600 border-slate-200';
-              let connNote: string | undefined;
-
-              if (!isOnline) {
-                connLabel = 'Mạch ngoại tuyến';
-                connClass = 'bg-slate-100 text-slate-600 border-slate-200';
-                connNote = 'ESP32 đang mất kết nối mạng.';
-              } else if (item.id === 'aht20') {
-                const aht = sensorHealth?.aht20;
-                if (!aht) {
-                  connLabel = 'Đang chờ dữ liệu';
-                } else if (aht.ok && aht.status === 'SIMULATED') {
-                  connLabel = 'Mô phỏng';
-                  connClass = 'bg-amber-50 text-amber-700 border-amber-200';
-                } else if (aht.ok) {
-                  connLabel = 'Đang kết nối';
-                  connClass = 'bg-emerald-50 text-emerald-700 border-emerald-200';
-                } else {
-                  connLabel = aht.status === 'READ_ERROR' ? 'Lỗi đọc dữ liệu' : 'Mất kết nối';
-                  connClass = 'bg-rose-50 text-rose-700 border-rose-200';
-                  connNote = aht.message;
-                }
-              } else if (item.id === 'mq135') {
-                const mq = sensorHealth?.mq135;
-                if (!mq) {
-                  connLabel = 'Đang chờ dữ liệu';
-                } else if (mq.ok && mq.status === 'SIMULATED') {
-                  connLabel = 'Mô phỏng';
-                  connClass = 'bg-amber-50 text-amber-700 border-amber-200';
-                } else if (mq.ok) {
-                  connLabel = 'Đang kết nối';
-                  connClass = 'bg-emerald-50 text-emerald-700 border-emerald-200';
-                } else {
-                  connLabel = mq.status === 'OUT_OF_RANGE' ? 'Vượt ngưỡng ADC' : 'Mất kết nối';
-                  connClass = 'bg-rose-50 text-rose-700 border-rose-200';
-                  connNote = mq.message;
-                }
-              } else if (item.id === 'door') {
-                connLabel = 'Digital 1-bit';
-                connClass = 'bg-sky-50 text-sky-700 border-sky-200';
-                connNote =
-                  typeof doorOpen === 'boolean'
-                    ? `Hiện tại: ${doorOpen ? 'Đang mở' : 'Đang đóng'} (không tự báo rút dây)`
-                    : 'Không tự phát hiện rút dây';
-              } else {
-                connLabel = 'Mạch trực tuyến';
-                connClass = 'bg-emerald-50 text-emerald-700 border-emerald-200';
-                connNote =
-                  item.id === 'fan'
-                    ? `Chế độ: ${currentFanMode === 'MANUAL' ? 'Thủ công' : 'Tự động'} · Không hồi tiếp dây`
-                    : 'Relay ngõ ra · Không hồi tiếp dây';
-              }
-
-              return (
-              <div
-                key={item.id}
-                className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between gap-3"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                        {item.category === 'SENSOR' ? 'Cảm biến' : 'Thiết bị điều khiển'}
-                      </span>
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700 text-[10px] font-semibold">
-                        <Cpu className="w-3 h-3 text-emerald-600" />
-                        {getPeripheralPinLabel(item.id, peripherals)}
-                      </span>
-                      <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${connClass}`}
-                      >
-                        {connLabel}
-                      </span>
-                    </div>
-                    <div className="text-xs font-bold text-slate-900 mt-1">{item.name}</div>
-                    <div className="text-[11px] text-slate-500 mt-1">{item.description}</div>
-                    {connNote && (
-                      <div
-                        className={`text-[11px] mt-1 ${
-                          connClass.includes('rose') ? 'text-rose-600 font-medium' : 'text-slate-500'
-                        }`}
-                      >
-                        {connNote}
-                      </div>
-                    )}
-                  </div>
-
-                  {isAdmin && (
-                    <button
-                      type="button"
-                      disabled={isConfiguring}
-                      onClick={() => handleRemovePeripheral(item)}
-                      className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-700 bg-white hover:bg-rose-50 border border-rose-200 transition disabled:opacity-50"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Xóa</span>
-                    </button>
-                  )}
-                </div>
-
-                {item.autoKey && (
-                  <label className="flex items-center justify-between text-xs text-slate-600 pt-2.5 border-t border-slate-200 cursor-pointer">
-                    <span>{item.autoLabel}</span>
-                    <input
-                      type="checkbox"
-                      checked={peripherals[item.autoKey] !== false}
-                      disabled={!isAdmin || isConfiguring}
-                      onChange={() => handleToggleAutoMode(item)}
-                      className="accent-emerald-600 w-4 h-4"
-                    />
-                  </label>
-                )}
-              </div>
-              );
-            })}
-
-            {/* Các thiết bị ngoại vi TẠO MỚI (Custom GPIO Peripherals) */}
-            {customPeripherals.map((cp) => {
-              const live = runtimeCustomList.find((r) => r.id === cp.id);
-              const isRelayOn = live?.state === 'ON' || live?.value === 1;
-              const isDigitalActive = live?.state === 'ACTIVE' || live?.value === 1;
-
-              let cpConnLabel = 'Mạch ngoại tuyến';
-              let cpConnClass = 'bg-slate-100 text-slate-600 border-slate-200';
-              if (!isOnline) {
-                cpConnLabel = 'Mạch ngoại tuyến';
-                cpConnClass = 'bg-slate-100 text-slate-600 border-slate-200';
-              } else if (cp.type === 'RELAY_OUTPUT') {
-                cpConnLabel = 'Mạch trực tuyến';
-                cpConnClass = 'bg-emerald-50 text-emerald-700 border-emerald-200';
-              } else if (!live) {
-                cpConnLabel = 'Chờ dữ liệu';
-                cpConnClass = 'bg-slate-100 text-slate-600 border-slate-200';
-              } else if (cp.type === 'ANALOG_INPUT' && live.raw_adc !== undefined && live.raw_adc < 25) {
-                cpConnLabel = `Tín hiệu thấp (ADC ${live.raw_adc})`;
-                cpConnClass = 'bg-amber-50 text-amber-700 border-amber-200';
-              } else if (cp.type === 'DIGITAL_INPUT') {
-                cpConnLabel = 'Digital 1-bit';
-                cpConnClass = 'bg-sky-50 text-sky-700 border-sky-200';
-              } else {
-                cpConnLabel = 'Đang kết nối';
-                cpConnClass = 'bg-emerald-50 text-emerald-700 border-emerald-200';
-              }
-
-              return (
-                <div
-                  key={cp.id}
-                  className="p-4 rounded-xl bg-sky-50/50 border border-sky-200 flex flex-col justify-between gap-3"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="text-[10px] font-semibold uppercase tracking-wide text-sky-700">
-                          Tự tạo
-                        </span>
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-sky-200 text-sky-800 text-[10px] font-semibold">
-                          <Cpu className="w-3 h-3 text-sky-600" />
-                          GPIO {cp.gpio}
-                        </span>
-                        <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${cpConnClass}`}
-                        >
-                          {cpConnLabel}
-                        </span>
-                      </div>
-                      <div className="text-xs font-bold text-slate-900 mt-1 flex items-center gap-1.5">
-                        {cp.type === 'RELAY_OUTPUT' ? (
-                          <Power className="w-3.5 h-3.5 text-amber-600" />
-                        ) : cp.type === 'ANALOG_INPUT' ? (
-                          <Gauge className="w-3.5 h-3.5 text-sky-600" />
-                        ) : (
-                          <ToggleRight className="w-3.5 h-3.5 text-emerald-600" />
-                        )}
-                        <span>{cp.name}</span>
-                      </div>
-                      <div className="text-[11px] text-slate-500 mt-1">
-                        {cp.type === 'RELAY_OUTPUT'
-                          ? 'Thiết bị bật / tắt qua Relay'
-                          : cp.type === 'ANALOG_INPUT'
-                          ? 'Cảm biến đo mức (Analog)'
-                          : 'Cảm biến đóng / mở (Digital)'}
-                      </div>
-                    </div>
-
-                    {isAdmin && (
-                      <button
-                        type="button"
-                        disabled={isConfiguring}
-                        onClick={() => handleRemoveCustomPeripheral(cp)}
-                        className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-700 bg-white hover:bg-rose-50 border border-rose-200 transition disabled:opacity-50"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Xóa</span>
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="pt-2.5 border-t border-sky-200/70 flex items-center justify-between text-xs">
-                    {!isOnline ? (
-                      <>
-                        <span className="text-slate-500">Trạng thái:</span>
-                        <span className="text-slate-400 font-medium">Tạm ẩn (ngoại tuyến)</span>
-                      </>
-                    ) : cp.type === 'RELAY_OUTPUT' ? (
-                      <>
-                        <span className="text-slate-600">
-                          Trạng thái:{' '}
-                          <strong className={isRelayOn ? 'text-amber-700' : 'text-slate-500'}>
-                            {isRelayOn ? 'Đang bật' : 'Đang tắt'}
-                          </strong>
-                        </span>
-                        <button
-                          type="button"
-                          disabled={isViewer}
-                          onClick={() => handleControlCustomRelay(cp, isRelayOn)}
-                          className={`px-3 py-1 rounded-lg text-xs font-semibold border transition ${
-                            isViewer
-                              ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                              : isRelayOn
-                              ? 'bg-amber-500 text-white border-amber-500'
-                              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                          }`}
-                        >
-                          {isRelayOn ? 'Tắt' : 'Bật'}
-                        </button>
-                      </>
-                    ) : cp.type === 'ANALOG_INPUT' ? (
-                      <>
-                        <span className="text-slate-600">Giá trị đo:</span>
-                        <strong className="text-sky-800 text-sm">
-                          {live?.value !== undefined ? `${live.value}${cp.unit || '%'}` : '--'}
-                        </strong>
-                      </>
-                    ) : (
-                      <>
-                        <span className="text-slate-600">Trạng thái:</span>
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border ${
-                            live
-                              ? isDigitalActive
-                                ? 'bg-amber-50 text-amber-800 border-amber-200'
-                                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                              : 'bg-white text-slate-500 border-slate-200'
-                          }`}
-                        >
-                          {live ? (isDigitalActive ? 'Đang kích hoạt' : 'Bình thường') : 'Chờ tín hiệu'}
-                        </span>
-                      </>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Trạng thái cảm biến đang gắn */}
-      <SensorHealthPanel
-        sensorHealth={sensorHealth}
-        peripherals={peripherals}
-        doorOpen={doorOpen}
-        isOnline={isOnline}
-        variant="detailed"
-      />
 
       {/* Thông số hiện tại & Thống kê */}
-      {isOnline && (ahtEnabled || mqEnabled) && (
+      {(ahtEnabled || mqEnabled) && (
         <div
           className={`grid grid-cols-1 gap-4 ${
             ahtEnabled && mqEnabled
@@ -1061,83 +716,36 @@ export const DeviceDetailPage: React.FC = () => {
               : 'sm:grid-cols-1'
           }`}
         >
-          {ahtEnabled && (
-            <>
-              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-                <div className="flex items-center justify-between text-xs font-medium text-slate-500">
+          {metricCards.map(metric => {
+            const style = METRIC_STYLES[metric.status];
+            const Icon = metric.icon;
+            const hasValue = metric.status !== 'ERROR' && metric.status !== 'NO_DATA';
+            return (
+              <div key={metric.id} className={`border rounded-2xl p-4 shadow-sm transition-colors ${style.card}`}>
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-medium text-slate-500">
                   <span className="flex items-center gap-1.5">
-                    <Thermometer className="w-4 h-4 text-amber-500" />
-                    <span>Nhiệt độ</span>
+                    <Icon className={`w-4 h-4 ${metric.status === 'WARNING' || metric.status === 'CRITICAL' ? style.text : metric.iconClass}`} />
+                    <span>{metric.label}</span>
                   </span>
-                  <span className="text-[11px] text-slate-400">Báo: &ge;{tempWarn}°C</span>
-                </div>
-                <div className="text-2xl font-bold text-slate-900 mt-2">
-                  {aht20Ok && liveTemp !== null ? `${liveTemp}°C` : '--'}
-                </div>
-                <div className="text-xs text-slate-500 mt-1.5">
-                  TB: {avgTemp}°C ({minTemp}–{maxTemp}°C)
-                </div>
-              </div>
-
-              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-                <div className="flex items-center justify-between text-xs font-medium text-slate-500">
-                  <span className="flex items-center gap-1.5">
-                    <Droplets className="w-4 h-4 text-sky-500" />
-                    <span>Độ ẩm không khí</span>
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${style.badge}`}>
+                    {isOnline ? style.label : 'Ngoại tuyến'}
                   </span>
-                  <span className="text-[11px] text-slate-400">Báo: &ge;{humWarn}%</span>
                 </div>
-                <div className="text-2xl font-bold text-slate-900 mt-2">
-                  {aht20Ok && liveRH !== null ? `${liveRH}%` : '--'}
+                <div className={`text-2xl font-bold mt-2 ${style.text}`}>
+                  {hasValue ? <>{metric.value}<span className="ml-1 text-xs font-medium">{metric.unit}</span></> : '--'}
                 </div>
-                <div className="text-xs text-slate-500 mt-1.5">
-                  TB: {avgRH}% ({minRH}–{maxRH}%)
+                <div className="text-[11px] text-slate-600 mt-1.5">
+                  Cảnh báo: ≥{metric.warn} {metric.unit} · Nguy hiểm: ≥{metric.critical} {metric.unit}
                 </div>
+                <div className="text-xs text-slate-500 mt-1.5">{isOnline ? metric.summary : 'TB: -- · Thấp nhất: -- · Cao nhất: --'}</div>
               </div>
-
-              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-                <div className="flex items-center justify-between text-xs font-medium text-slate-500">
-                  <span className="flex items-center gap-1.5">
-                    <Wind className="w-4 h-4 text-emerald-600" />
-                    <span>Độ ẩm hạt (EMC)</span>
-                  </span>
-                  <span className="text-[11px] text-slate-400">Báo: &ge;{emcWarn}%</span>
-                </div>
-                <div className="text-2xl font-bold text-emerald-700 mt-2">
-                  {aht20Ok && liveEMC !== null ? `${liveEMC}%` : '--'}
-                </div>
-                <div className="text-xs text-slate-500 mt-1.5">
-                  TB: {avgEMC}% &middot; An toàn &le; {emcWarn}%
-                </div>
-              </div>
-            </>
-          )}
-
-          {mqEnabled && (
-            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-              <div className="flex items-center justify-between text-xs font-medium text-slate-500">
-                <span className="flex items-center gap-1.5">
-                  <Flame className="w-4 h-4 text-purple-600" />
-                  <span>Khí Gas (MQ-135)</span>
-                </span>
-                <span className="text-[11px] text-slate-400">Báo: &ge;{gasWarn} ppm</span>
-              </div>
-              <div className="text-2xl font-bold text-slate-900 mt-2">
-                {mq135Ok && liveGas !== null ? (
-                  <>
-                    {liveGas} <span className="text-xs font-medium text-slate-500">ppm</span>
-                  </>
-                ) : (
-                  '--'
-                )}
-              </div>
-              <div className="text-xs text-slate-500 mt-1.5">
-                TB: {avgGas} ppm ({minGas}–{maxGas} ppm)
-              </div>
-            </div>
-          )}
+            );
+          })}
         </div>
       )}
+
+      <PeripheralPanel key={device.id} sensors={sensorItems} actuators={actuatorItems} isAdmin={isAdmin}
+        isOnline={isOnline} busy={isConfiguring || isControlling} onAdd={openCreateCustomModal} />
 
       {/* Biểu đồ xu hướng */}
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
@@ -1147,12 +755,13 @@ export const DeviceDetailPage: React.FC = () => {
             <h3 className="font-bold text-slate-900 text-sm">Biểu đồ theo dõi gần đây</h3>
           </div>
           <div className="text-xs text-slate-500 flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>Tự động cập nhật</span>
+            <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+            <span>{isOnline ? 'Tự động cập nhật' : 'Ngừng cập nhật · Ngoại tuyến'}</span>
           </div>
         </div>
 
         <div className="h-72 w-full">
+          {isOnline && chartData.length > 0 ? (
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -1226,6 +835,13 @@ export const DeviceDetailPage: React.FC = () => {
               )}
             </LineChart>
           </ResponsiveContainer>
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-slate-200 bg-slate-50 text-slate-400">
+              <Activity className="w-7 h-7" />
+              <span className="text-2xl font-semibold">--</span>
+              <span className="text-sm">{isOnline ? 'Đang chờ dữ liệu mới từ thiết bị' : 'Thiết bị ngoại tuyến · Biểu đồ đã được đặt lại'}</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1316,26 +932,30 @@ export const DeviceDetailPage: React.FC = () => {
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-900 focus:outline-none focus:border-rose-500"
                 />
               </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Gas cảnh báo (ppm)</label>
-                <input
-                  type="number"
-                  step="10"
-                  value={gasWarn}
-                  onChange={(e) => setGasWarn(Number(e.target.value))}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-900 focus:outline-none focus:border-emerald-500"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-rose-700 mb-1">Gas nguy hiểm (ppm)</label>
-                <input
-                  type="number"
-                  step="10"
-                  value={gasCrit}
-                  onChange={(e) => setGasCrit(Number(e.target.value))}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-900 focus:outline-none focus:border-rose-500"
-                />
-              </div>
+              {mqEnabled && (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">Gas cảnh báo (ppm)</label>
+                    <input
+                      type="number"
+                      step="10"
+                      value={gasWarn}
+                      onChange={(e) => setGasWarn(Number(e.target.value))}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-900 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-rose-700 mb-1">Gas nguy hiểm (ppm)</label>
+                    <input
+                      type="number"
+                      step="10"
+                      value={gasCrit}
+                      onChange={(e) => setGasCrit(Number(e.target.value))}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-900 focus:outline-none focus:border-rose-500"
+                    />
+                  </div>
+                </>
+              )}
             </div>
 
             <button
@@ -1416,7 +1036,7 @@ export const DeviceDetailPage: React.FC = () => {
             <div className="flex items-center justify-between border-b border-slate-200 pb-3">
               <div className="flex items-center gap-2">
                 <Cpu className="w-5 h-5 text-emerald-600" />
-                <h2 className="text-base font-bold text-slate-900">Tạo Thiết Bị Ngoại Vi Mới</h2>
+                <h2 className="text-base font-bold text-slate-900">Thêm ngoại vi</h2>
               </div>
               <button
                 type="button"
@@ -1467,9 +1087,9 @@ export const DeviceDetailPage: React.FC = () => {
                     </optgroup>
                   )}
                   <optgroup label="Ngoại vi mở rộng tự tạo (GPIO đơn)">
-                    <option value="RELAY_OUTPUT">Thiết bị bật / tắt (Quạt, Đèn, Còi, Bơm...)</option>
-                    <option value="DIGITAL_INPUT">Cảm biến đóng / mở (0 / 1)</option>
-                    <option value="ANALOG_INPUT">Cảm biến đo mức (Analog 0–100%)</option>
+                    <option value="RELAY_OUTPUT" disabled={customPeripherals.length >= 8}>Thiết bị bật / tắt (Quạt, Đèn, Còi, Bơm...)</option>
+                    <option value="DIGITAL_INPUT" disabled={customPeripherals.length >= 8}>Cảm biến đóng / mở (0 / 1)</option>
+                    <option value="ANALOG_INPUT" disabled={customPeripherals.length >= 8}>Cảm biến đo mức (Analog 0–100%)</option>
                   </optgroup>
                 </select>
               </div>
@@ -1557,7 +1177,8 @@ export const DeviceDetailPage: React.FC = () => {
                 <button
                   type="submit"
                   disabled={
-                    isConfiguring ||
+                    isConfiguring || !isOnline ||
+                    (!cpType.startsWith('BUILTIN_') && customPeripherals.length >= 8) ||
                     (cpType === 'BUILTIN_AHT20'
                       ? availableI2cPairsForModal.length === 0
                       : availableGpiosForModal.length === 0)

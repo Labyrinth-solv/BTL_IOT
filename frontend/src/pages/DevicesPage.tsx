@@ -56,6 +56,7 @@ export const DevicesPage: React.FC = () => {
   const [suspendModalDevice, setSuspendModalDevice] = useState<Device | null>(null);
   const [suspendReason, setSuspendReason] = useState('Tạm ngưng kiểm tra thiết bị');
   const [isSubmittingSuspend, setIsSubmittingSuspend] = useState(false);
+  const [deletingDeviceId, setDeletingDeviceId] = useState<string | null>(null);
 
   const fetchData = async () => {
     setIsLoading(true);
@@ -231,21 +232,25 @@ export const DevicesPage: React.FC = () => {
   };
 
   const handleDeletePermanent = async (device: Device) => {
+    if (deletingDeviceId) return;
     if (
       !window.confirm(
-        `Xóa hẳn thiết bị ${device.device_code} (${device.name}) cùng toàn bộ dữ liệu liên quan?`
+        `Tắt và khóa toàn bộ đầu ra của ${device.device_code} (${device.name}), sau đó xóa hẳn node cùng dữ liệu?\n\nCần mạch kết nối và xác nhận đã tắt. Đầu ra chỉ được hoạt động lại sau khi đăng ký lại node.`
       )
     ) {
       return;
     }
+    setDeletingDeviceId(device.id);
     try {
       const res = await api.deleteDevice(device.id);
       if (res.success) {
-        showToast(`Đã xóa thiết bị ${device.device_code}`, 'success');
+        showToast(res.message || `Đã tắt đầu ra và xóa node ${device.device_code}`, 'success');
         fetchData();
       }
     } catch (err: any) {
       showToast(err.message || 'Lỗi xóa thiết bị', 'error');
+    } finally {
+      setDeletingDeviceId(null);
     }
   };
 
@@ -378,7 +383,7 @@ export const DevicesPage: React.FC = () => {
             className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:border-emerald-500"
           >
             <option value="ALL">Tất cả ({devices.length})</option>
-            <option value="ACTIVE">Đang hoạt động</option>
+            <option value="ACTIVE">Đã kích hoạt</option>
             <option value="PROVISIONED">Đã cấp phép</option>
             <option value="MAINTENANCE">Bảo trì</option>
             <option value="SUSPENDED">Đình chỉ</option>
@@ -423,7 +428,7 @@ export const DevicesPage: React.FC = () => {
           ) : (
             filteredDevices.map((dev) => {
               const wsStatus = deviceStatus[dev.device_code];
-              const liveOnline = wsStatus ? wsStatus.state !== 'OFFLINE' : dev.is_online;
+              const liveOnline = wsStatus ? wsStatus.is_online ?? wsStatus.state === 'ONLINE' : dev.is_online;
               const isSuspended = dev.lifecycle_state === 'SUSPENDED';
               const isDecommissioned = dev.lifecycle_state === 'DECOMMISSIONED';
               const isMaintenance = dev.lifecycle_state === 'MAINTENANCE';
@@ -449,7 +454,7 @@ export const DevicesPage: React.FC = () => {
                       <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
                         {dev.device_code}
                       </span>
-                      <LifecycleBadge state={dev.lifecycle_state} />
+                      <LifecycleBadge state={(wsStatus?.lifecycle_state as Device['lifecycle_state']) ?? dev.lifecycle_state} />
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -570,10 +575,11 @@ export const DevicesPage: React.FC = () => {
                         {isAdmin && (
                           <button
                             onClick={() => handleDeletePermanent(dev)}
-                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-600 text-white hover:bg-rose-700 text-xs font-semibold transition"
+                            disabled={deletingDeviceId !== null}
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-50 disabled:cursor-wait text-xs font-semibold transition"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
-                            <span>Xóa hẳn</span>
+                            <span>{deletingDeviceId === dev.id ? 'Đang chờ mạch tắt…' : 'Xóa hẳn'}</span>
                           </button>
                         )}
                       </div>
@@ -608,7 +614,7 @@ export const DevicesPage: React.FC = () => {
                 ) : (
                   filteredDevices.map((dev) => {
                     const wsStatus = deviceStatus[dev.device_code];
-                    const liveOnline = wsStatus ? wsStatus.state !== 'OFFLINE' : dev.is_online;
+                    const liveOnline = wsStatus ? wsStatus.is_online ?? wsStatus.state === 'ONLINE' : dev.is_online;
                     return (
                       <tr
                         key={dev.id}
@@ -619,7 +625,7 @@ export const DevicesPage: React.FC = () => {
                         <td className="py-3.5 px-4 text-slate-600">{dev.device_code}</td>
                         <td className="py-3.5 px-4">{dev.zone?.name || 'Chưa gán'}</td>
                         <td className="py-3.5 px-4">
-                          <LifecycleBadge state={dev.lifecycle_state} />
+                          <LifecycleBadge state={(wsStatus?.lifecycle_state as Device['lifecycle_state']) ?? dev.lifecycle_state} />
                         </td>
                         <td className="py-3.5 px-4">
                           <span

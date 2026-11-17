@@ -23,7 +23,7 @@
 //        cùng 1 bản firmware cho nhiều mạch ESP32 mà không bị trùng MQTT ClientID.
 #define USE_MAC_AS_DEVICE_ID false
 #define DEVICE_ID           "DEV_SILO_01"
-#define FIRMWARE_VERSION    "1.1.1"
+#define FIRMWARE_VERSION    "1.1.3"
 #define HARDWARE_VERSION    "ESP32-WROOM-32D-v2"
 
 // Chu kỳ lấy mẫu và gửi bản tin Telemetry mặc định (ms)

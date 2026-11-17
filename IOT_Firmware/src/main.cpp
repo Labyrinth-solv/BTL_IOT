@@ -15,10 +15,13 @@
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 Preferences preferences;
+// Durable output interlock, independent of the editable peripheral configuration.
+bool nodeOutputsInhibited = false;
+String registrationId = "";
 
 // Cấu hình bật/tắt từng module & ngưỡng động (đồng bộ từ Web, lưu vào NVS Flash)
 bool cfgAht20Enabled  = true;
-bool cfgMq135Enabled  = true;
+bool cfgMq135Enabled  = false;
 bool cfgDoorEnabled   = true;
 bool cfgFanEnabled    = true;
 bool cfgBuzzerEnabled = true;
@@ -97,6 +100,12 @@ struct CustomPeripheral {
 };
 CustomPeripheral customPeripherals[MAX_CUSTOM_PERIPHERALS];
 int customPeripheralCount = 0;
+constexpr size_t MQTT_BUFFER_BYTES = 8192;
+String recentCommandIds[8];
+String recentCommandAcks[8];
+uint8_t nextCommandCache = 0;
+uint32_t bootNonce = 0;
+uint32_t messageSequence = 0;
 
 bool isSafeCustomGpio(uint8_t gpio, const String& type) {
   const uint8_t allowed[] = {4, 5, 13, 14, 16, 17, 18, 19, 23, 25, 26, 27, 32, 33, 34, 35, 36, 39};
@@ -108,6 +117,8 @@ bool isSafeCustomGpio(uint8_t gpio, const String& type) {
     }
   }
   if (!found) return false;
+  if (type != "RELAY_OUTPUT" && type != "DIGITAL_INPUT" && type != "ANALOG_INPUT") return false;
+  if (type == "ANALOG_INPUT" && !(gpio == 32 || gpio == 33 || gpio == 34 || gpio == 35 || gpio == 36 || gpio == 39)) return false;
   if (type == "RELAY_OUTPUT" && gpio >= 34) return false; // GPIO 34-39 la chan Input-only
   return true;
 }
@@ -119,7 +130,8 @@ bool isSafeBuiltinGpio(uint8_t gpio, bool allowInputOnly, bool allowI2C) {
 }
 
 void writeCustomRelayPin(const CustomPeripheral& cp) {
-  bool level = cp.activeHigh ? cp.outputState : !cp.outputState;
+  bool enabled = cp.outputState && !nodeOutputsInhibited;
+  bool level = cp.activeHigh ? enabled : !enabled;
   digitalWrite(cp.gpio, level ? HIGH : LOW);
 }
 
@@ -133,7 +145,7 @@ void applyCustomPeripheralsHardware() {
       cp.rawValue = cp.outputState ? 1 : 0;
       cp.displayValue = cp.outputState ? 1 : 0;
     } else if (cp.type == "DIGITAL_INPUT") {
-      pinMode(cp.gpio, cp.pullUp ? INPUT_PULLUP : INPUT);
+      pinMode(cp.gpio, cp.pullUp && cp.gpio < 34 ? INPUT_PULLUP : INPUT);
     } else if (cp.type == "ANALOG_INPUT") {
       pinMode(cp.gpio, INPUT);
     }
@@ -143,10 +155,25 @@ void applyCustomPeripheralsHardware() {
 void parseCustomPeripheralsArray(JsonArray arr, bool preserveOutputStates) {
   bool prevStates[MAX_CUSTOM_PERIPHERALS];
   String prevIds[MAX_CUSTOM_PERIPHERALS];
+  uint8_t prevPins[MAX_CUSTOM_PERIPHERALS];
+  bool prevActiveHigh[MAX_CUSTOM_PERIPHERALS];
+  String prevTypes[MAX_CUSTOM_PERIPHERALS];
   int prevCount = customPeripheralCount;
   for (int i = 0; i < prevCount; i++) {
     prevIds[i] = customPeripherals[i].id;
     prevStates[i] = customPeripherals[i].outputState;
+    prevPins[i] = customPeripherals[i].gpio;
+    prevActiveHigh[i] = customPeripherals[i].activeHigh;
+    prevTypes[i] = customPeripherals[i].type;
+    bool keepPin = false;
+    for (JsonObject next : arr) {
+      if (String(next["id"] | "") == prevIds[i] && (next["gpio"] | -1) == prevPins[i] &&
+          String(next["type"] | "") == prevTypes[i] && (next["active_high"] | true) == prevActiveHigh[i]) keepPin = true;
+    }
+    if (!keepPin) {
+      if (prevTypes[i] == "RELAY_OUTPUT") digitalWrite(prevPins[i], prevActiveHigh[i] ? LOW : HIGH);
+      pinMode(prevPins[i], INPUT);
+    }
   }
 
   int nextCount = 0;
@@ -171,7 +198,7 @@ void parseCustomPeripheralsArray(JsonArray arr, bool preserveOutputStates) {
 
     if (preserveOutputStates) {
       for (int j = 0; j < prevCount; j++) {
-        if (prevIds[j] == cp.id) {
+        if (prevIds[j] == cp.id && prevPins[j] == cp.gpio && prevTypes[j] == cp.type && prevActiveHigh[j] == cp.activeHigh) {
           cp.outputState = prevStates[j];
           break;
         }
@@ -180,7 +207,6 @@ void parseCustomPeripheralsArray(JsonArray arr, bool preserveOutputStates) {
     customPeripherals[nextCount++] = cp;
   }
   customPeripheralCount = nextCount;
-  applyCustomPeripheralsHardware();
 }
 
 String serializeCustomPeripheralsConfig() {
@@ -198,6 +224,69 @@ String serializeCustomPeripheralsConfig() {
   String out;
   serializeJson(arr, out);
   return out;
+}
+
+bool validateConfig(JsonObject payload, String& error) {
+  if (!payload["sampling_interval_ms"].isNull()) {
+    double interval = payload["sampling_interval_ms"].as<double>();
+    if (!isfinite(interval) || interval < 1000 || interval > 3600000 || floor(interval) != interval) {
+      error = "Invalid sampling interval"; return false;
+    }
+  }
+  const char* warnKeys[] = {"temp_warn_threshold", "hum_warn_threshold", "gas_warn_threshold", "emc_warn_threshold"};
+  const char* critKeys[] = {"temp_crit_threshold", "hum_crit_threshold", "gas_crit_threshold", "emc_crit_threshold"};
+  float warns[] = {cfgTempWarn, cfgHumWarn, cfgGasWarn, cfgEmcWarn};
+  float crits[] = {cfgTempCrit, cfgHumCrit, cfgGasCrit, cfgEmcCrit};
+  float mins[] = {-40, 0, 0, 0};
+  float maxs[] = {85, 100, 10000, 100};
+  for (int i = 0; i < 4; i++) {
+    float warn = payload[warnKeys[i]] | warns[i];
+    float crit = payload[critKeys[i]] | crits[i];
+    if (!isfinite(warn) || !isfinite(crit) || warn < mins[i] || crit > maxs[i] || warn >= crit) {
+      error = "Invalid warning/critical thresholds"; return false;
+    }
+  }
+  JsonObject p = payload["peripherals"];
+  const char* enableKeys[] = {"aht20_enabled", "aht20_enabled", "mq135_enabled", "door_enabled", "fan_enabled", "buzzer_enabled"};
+  const char* pinKeys[] = {"aht20_sda_gpio", "aht20_scl_gpio", "mq135_gpio", "door_gpio", "fan_gpio", "buzzer_gpio"};
+  bool enabled[] = {cfgAht20Enabled, cfgAht20Enabled, cfgMq135Enabled, cfgDoorEnabled, cfgFanEnabled, cfgBuzzerEnabled};
+  int pins[] = {cfgPinSda, cfgPinScl, cfgPinMq135, cfgPinDoor, cfgPinFan, cfgPinBuzzer};
+  bool used[40] = {};
+  for (int i = 0; i < 6; i++) {
+    if (!(p[enableKeys[i]] | enabled[i])) continue;
+    int pin = p[pinKeys[i]] | pins[i];
+    bool safe = pin >= 0 && pin < 40 &&
+      (i < 2 ? isSafeBuiltinGpio(pin, false, true) :
+       i == 2 ? isSafeCustomGpio(pin, "ANALOG_INPUT") : isSafeBuiltinGpio(pin, false, false));
+    if (!safe || used[pin]) { error = "Invalid or duplicate builtin GPIO"; return false; }
+    used[pin] = true;
+  }
+  if (payload["custom_peripherals"].isNull()) {
+    for (int i = 0; i < customPeripheralCount; i++) {
+      int pin = customPeripherals[i].gpio;
+      if (used[pin]) { error = "GPIO already owned by custom peripheral"; return false; }
+      used[pin] = true;
+    }
+    return true;
+  }
+  if (!payload["custom_peripherals"].is<JsonArray>()) { error = "Invalid peripheral array"; return false; }
+  JsonArray arr = payload["custom_peripherals"];
+  if (arr.size() > MAX_CUSTOM_PERIPHERALS) { error = "Too many peripherals"; return false; }
+  for (size_t i = 0; i < arr.size(); i++) {
+    JsonObject cp = arr[i];
+    int pin = cp["gpio"] | -1;
+    String type = cp["type"] | "";
+    String id = cp["id"] | "";
+    if (id.isEmpty() || pin < 0 || pin >= 40 || !isSafeCustomGpio(pin, type) || used[pin] ||
+        (type == "DIGITAL_INPUT" && pin >= 34 && (cp["pull_up"] | true))) {
+      error = "Invalid or duplicate custom GPIO"; return false;
+    }
+    for (size_t j = 0; j < i; j++) {
+      if (String(arr[j]["id"] | "") == id) { error = "Duplicate peripheral ID"; return false; }
+    }
+    used[pin] = true;
+  }
+  return true;
 }
 
 // Topic MQTT động theo runtimeDeviceId
@@ -234,13 +323,41 @@ void initDeviceIdentity() {
   topicAck       = String("grain/devices/") + runtimeDeviceId + "/ack";
 }
 
+void loadNodeLifecycle() {
+  Preferences life;
+  if (!life.begin("grain_life", true)) return; // First boot: namespace does not exist yet.
+  String state = life.getString("state", "");
+  life.end();
+  if (!state.length()) return;
+  JsonDocument doc;
+  if (deserializeJson(doc, state) || !doc["outputs_inhibited"].is<bool>() || !doc["registration_id"].is<String>()) {
+    nodeOutputsInhibited = true; // Corrupted lifecycle must not start outputs.
+    return;
+  }
+  registrationId = doc["registration_id"].as<String>();
+  nodeOutputsInhibited = doc["outputs_inhibited"].as<bool>();
+}
+
+bool saveNodeLifecycle(const String& nextRegistration, bool inhibited) {
+  Preferences life;
+  if (!life.begin("grain_life", false)) return false;
+  JsonDocument doc;
+  doc["registration_id"] = nextRegistration;
+  doc["outputs_inhibited"] = inhibited;
+  String state;
+  serializeJson(doc, state);
+  bool saved = life.putString("state", state) > 0;
+  life.end();
+  return saved;
+}
+
 void loadConfigFromNVS() {
   if (!preferences.begin("grain_cfg", true)) return;
   samplingIntervalMs = preferences.getULong("interval", DEFAULT_SAMPLING_INTERVAL_MS);
   if (samplingIntervalMs < 1000) samplingIntervalMs = DEFAULT_SAMPLING_INTERVAL_MS;
 
   cfgAht20Enabled  = preferences.getBool("en_aht", true);
-  cfgMq135Enabled  = preferences.getBool("en_mq", true);
+  cfgMq135Enabled  = preferences.getBool("en_mq", false);
   cfgDoorEnabled   = preferences.getBool("en_door", true);
   cfgFanEnabled    = preferences.getBool("en_fan", true);
   cfgBuzzerEnabled = preferences.getBool("en_buz", true);
@@ -283,33 +400,35 @@ void loadConfigFromNVS() {
                 cfgFanEnabled, controlMode.c_str(), cfgBuzzerEnabled, cfgBuzzerAuto, customPeripheralCount);
 }
 
-void saveConfigToNVS() {
-  if (!preferences.begin("grain_cfg", false)) return;
-  preferences.putULong("interval", samplingIntervalMs);
-  preferences.putBool("en_aht", cfgAht20Enabled);
-  preferences.putBool("en_mq", cfgMq135Enabled);
-  preferences.putBool("en_door", cfgDoorEnabled);
-  preferences.putBool("en_fan", cfgFanEnabled);
-  preferences.putBool("en_buz", cfgBuzzerEnabled);
-  preferences.putBool("auto_buz", cfgBuzzerAuto);
-  preferences.putBool("auto_fan", controlMode == "AUTO");
-  preferences.putUChar("pin_sda", cfgPinSda);
-  preferences.putUChar("pin_scl", cfgPinScl);
-  preferences.putUChar("pin_mq", cfgPinMq135);
-  preferences.putUChar("pin_door", cfgPinDoor);
-  preferences.putUChar("pin_fan", cfgPinFan);
-  preferences.putUChar("pin_buz", cfgPinBuzzer);
+bool saveConfigToNVS() {
+  if (!preferences.begin("grain_cfg", false)) return false;
+  bool saved = true;
+  saved = (preferences.putULong("interval", samplingIntervalMs) > 0) && saved;
+  saved = (preferences.putBool("en_aht", cfgAht20Enabled) > 0) && saved;
+  saved = (preferences.putBool("en_mq", cfgMq135Enabled) > 0) && saved;
+  saved = (preferences.putBool("en_door", cfgDoorEnabled) > 0) && saved;
+  saved = (preferences.putBool("en_fan", cfgFanEnabled) > 0) && saved;
+  saved = (preferences.putBool("en_buz", cfgBuzzerEnabled) > 0) && saved;
+  saved = (preferences.putBool("auto_buz", cfgBuzzerAuto) > 0) && saved;
+  saved = (preferences.putBool("auto_fan", controlMode == "AUTO") > 0) && saved;
+  saved = (preferences.putUChar("pin_sda", cfgPinSda) > 0) && saved;
+  saved = (preferences.putUChar("pin_scl", cfgPinScl) > 0) && saved;
+  saved = (preferences.putUChar("pin_mq", cfgPinMq135) > 0) && saved;
+  saved = (preferences.putUChar("pin_door", cfgPinDoor) > 0) && saved;
+  saved = (preferences.putUChar("pin_fan", cfgPinFan) > 0) && saved;
+  saved = (preferences.putUChar("pin_buz", cfgPinBuzzer) > 0) && saved;
 
-  preferences.putFloat("t_warn", cfgTempWarn);
-  preferences.putFloat("t_crit", cfgTempCrit);
-  preferences.putFloat("h_warn", cfgHumWarn);
-  preferences.putFloat("h_crit", cfgHumCrit);
-  preferences.putFloat("g_warn", cfgGasWarn);
-  preferences.putFloat("g_crit", cfgGasCrit);
-  preferences.putFloat("e_warn", cfgEmcWarn);
-  preferences.putFloat("e_crit", cfgEmcCrit);
-  preferences.putString("custom_per", serializeCustomPeripheralsConfig());
+  saved = (preferences.putFloat("t_warn", cfgTempWarn) > 0) && saved;
+  saved = (preferences.putFloat("t_crit", cfgTempCrit) > 0) && saved;
+  saved = (preferences.putFloat("h_warn", cfgHumWarn) > 0) && saved;
+  saved = (preferences.putFloat("h_crit", cfgHumCrit) > 0) && saved;
+  saved = (preferences.putFloat("g_warn", cfgGasWarn) > 0) && saved;
+  saved = (preferences.putFloat("g_crit", cfgGasCrit) > 0) && saved;
+  saved = (preferences.putFloat("e_warn", cfgEmcWarn) > 0) && saved;
+  saved = (preferences.putFloat("e_crit", cfgEmcCrit) > 0) && saved;
+  saved = (preferences.putString("custom_per", serializeCustomPeripheralsConfig()) > 0) && saved;
   preferences.end();
+  return saved;
 }
 
 // =============================================================================
@@ -334,13 +453,28 @@ static void setRelayPin(uint8_t pin, bool enable) {
 }
 
 void setFanRelay(bool enable) {
-  fanState = enable;
-  setRelayPin(cfgPinFan, enable);
+  fanState = cfgFanEnabled && enable && !nodeOutputsInhibited;
+  if (cfgFanEnabled) setRelayPin(cfgPinFan, fanState);
 }
 
 void setBuzzerRelay(bool enable) {
-  buzzerState = enable;
-  setRelayPin(cfgPinBuzzer, enable);
+  buzzerState = cfgBuzzerEnabled && enable && !nodeOutputsInhibited;
+  if (cfgBuzzerEnabled) setRelayPin(cfgPinBuzzer, buzzerState);
+}
+
+void inhibitAllOutputs() {
+  nodeOutputsInhibited = true;
+  buzzerManualOverride = false;
+  buzzerSilencedByUser = false;
+  setFanRelay(false);
+  setBuzzerRelay(false);
+  for (int i = 0; i < customPeripheralCount; i++) {
+    CustomPeripheral& cp = customPeripherals[i];
+    if (cp.type != "RELAY_OUTPUT") continue;
+    cp.outputState = false;
+    cp.rawValue = cp.displayValue = 0;
+    writeCustomRelayPin(cp); // Keep the output driven at its inactive level.
+  }
 }
 
 // =============================================================================
@@ -647,6 +781,8 @@ void sendStatusHeartbeat() {
   JsonDocument doc;
   doc["device_id"]   = runtimeDeviceId;
   doc["state"]       = "ONLINE";
+  doc["registration_id"] = registrationId;
+  doc["outputs_inhibited"] = nodeOutputsInhibited;
   doc["ip_address"]  = WiFi.localIP().toString();
   doc["mac_address"] = runtimeMacAddress;
   doc["chip_id"]     = runtimeChipId;
@@ -656,9 +792,9 @@ void sendStatusHeartbeat() {
   doc["uptime_sec"]  = millis() / 1000;
   doc["timestamp"]   = millis();
 
-  char buffer[512];
+  String buffer;
   serializeJson(doc, buffer);
-  mqttClient.publish(topicStatus.c_str(), buffer, true); // Retain flag
+  mqttClient.publish(topicStatus.c_str(), buffer.c_str(), true); // Retain flag
   Serial.printf("📡 [MQTT] Da phat ban tin Heartbeat ONLINE len %s (IP: %s | MAC: %s)\n",
                 topicStatus.c_str(), WiFi.localIP().toString().c_str(), runtimeMacAddress.c_str());
 }
@@ -666,11 +802,11 @@ void sendStatusHeartbeat() {
 void sendTelemetry() {
   if (!mqttClient.connected()) return;
 
-  unsigned long nowSec = millis() / 1000;
-  String msgId = "msg_esp_" + String(nowSec) + "_" + String(random(100, 999));
+  String msgId = runtimeDeviceId + "_" + String(bootNonce, HEX) + "_" + String(++messageSequence);
 
   JsonDocument doc;
   doc["msg_id"]      = msgId;
+  doc["registration_id"] = registrationId;
   doc["device_id"]   = runtimeDeviceId;
   doc["mac_address"] = runtimeMacAddress;
   doc["ip_address"]  = WiFi.localIP().toString();
@@ -703,6 +839,7 @@ void sendTelemetry() {
   // Actuators & Risk Level
   JsonObject actuators = doc["actuators"].to<JsonObject>();
   actuators["fan_state"]      = fanState ? "ON" : "OFF";
+  actuators["outputs_inhibited"] = nodeOutputsInhibited;
   actuators["buzzer_state"]   = buzzerState ? "ON" : "OFF";
   actuators["door_state"]     = isDoorOpen ? "OPEN" : "CLOSED";
   actuators["control_mode"]   = controlMode;
@@ -767,9 +904,9 @@ void sendTelemetry() {
 
   doc["rssi"] = WiFi.RSSI();
 
-  char buffer[2048];
+  String buffer;
   serializeJson(doc, buffer);
-  mqttClient.publish(topicTelemetry.c_str(), buffer, false);
+  if (!mqttClient.publish(topicTelemetry.c_str(), buffer.c_str(), false)) Serial.println("[MQTT] Telemetry publish failed");
 
   Serial.printf("📊 [Telemetry] T=%.1fC | RH=%.1f%% | EMC=%.1f%% | Gas=%.0f | Door=%s | Fan=%s | Buzzer=%s | Risk=%s\n",
                 currentTemperature, currentHumidity, currentEMC, currentGasPPM,
@@ -785,15 +922,8 @@ void sendTelemetry() {
 // XỬ LÝ LỆNH ĐIỀU KHIỂN TỪ BACKEND (/cmd) VÀ PHẢN HỒI ACK (/ack)
 // =============================================================================
 void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
-  char jsonBuffer[2048];
-  if (length >= sizeof(jsonBuffer)) length = sizeof(jsonBuffer) - 1;
-  memcpy(jsonBuffer, payload, length);
-  jsonBuffer[length] = '\0';
-
-  Serial.printf("📥 [MQTT Command] Nhan lenh tu topic %s: %s\n", topic, jsonBuffer);
-
   JsonDocument cmdDoc;
-  DeserializationError error = deserializeJson(cmdDoc, jsonBuffer);
+  DeserializationError error = deserializeJson(cmdDoc, (const byte*)payload, length);
   if (error) {
     Serial.println("❌ [MQTT] Giai ma JSON lenh that bai!");
     return;
@@ -802,17 +932,50 @@ void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
   const char* cmdId = cmdDoc["cmd_id"];
   const char* cmdType = cmdDoc["type"];
   JsonObject payloadObj = cmdDoc["payload"];
+  String incomingRegistration = cmdDoc["registration_id"] | "";
 
+  if (!cmdId || !cmdType || (!cmdDoc["device_id"].isNull() && String(cmdDoc["device_id"].as<const char*>()) != runtimeDeviceId)) return;
+  bool deactivating = strcmp(cmdType, "DEACTIVATE_NODE") == 0;
+  bool resuming = strcmp(cmdType, "UPDATE_CONFIG") == 0 && nodeOutputsInhibited &&
+    incomingRegistration.length() && incomingRegistration != registrationId;
+  bool blocked = (registrationId.length() && incomingRegistration != registrationId && !resuming) ||
+    (nodeOutputsInhibited && !deactivating && !resuming) ||
+    (deactivating && !incomingRegistration.length());
+  for (int i = 0; !blocked && i < 8; i++) {
+    if (recentCommandIds[i] == cmdId) {
+      mqttClient.publish(topicAck.c_str(), recentCommandAcks[i].c_str(), false);
+      return;
+    }
+  }
+
+  bool nvsSaved = true;
   String ackStatus = "SUCCESS";
   String ackMessage = "Lenh thuc thi thanh cong";
 
-  if (cmdType && strcmp(cmdType, "ACTUATOR_CONTROL") == 0) {
+  if (blocked) {
+    ackStatus = "FAILED";
+    ackMessage = "Node outputs locked or stale registration; re-enroll node first";
+  } else if (deactivating) {
+    inhibitAllOutputs();
+    registrationId = incomingRegistration;
+    if (!saveNodeLifecycle(registrationId, true)) {
+      ackStatus = "FAILED";
+      ackMessage = "Outputs OFF but lifecycle NVS save failed; node must not be deleted";
+    } else ackMessage = "All outputs OFF and locked in NVS until re-enrollment";
+  } else if (strcmp(cmdType, "ACTUATOR_CONTROL") == 0) {
     const char* action = payloadObj["action"];
     const char* target = payloadObj["target"];
     const char* mode = payloadObj["control_mode"];
 
+    if (!action || !target ||
+        (strcmp(action, "TURN_ON") != 0 && strcmp(action, "TURN_OFF") != 0 && strcmp(action, "SET_AUTO") != 0) ||
+        (strcmp(target, "VENTILATION_FAN") != 0 && strcmp(target, "ALARM_BUZZER") != 0 && strcmp(target, "CUSTOM_PERIPHERAL") != 0) ||
+        (strcmp(action, "SET_AUTO") == 0 && strcmp(target, "VENTILATION_FAN") != 0) ||
+        (mode && strcmp(mode, "AUTO") != 0 && strcmp(mode, "MANUAL") != 0)) {
+      ackStatus = "FAILED"; ackMessage = "Invalid actuator command";
+    }
     // 1. Điều khiển Quạt thông gió (Relay Kênh 1 - IN1)
-    if (!target || strcmp(target, "VENTILATION_FAN") == 0) {
+    else if (strcmp(target, "VENTILATION_FAN") == 0) {
       if (!cfgFanEnabled) {
         setFanRelay(false);
         ackStatus = "FAILED";
@@ -820,11 +983,11 @@ void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
       } else {
         if (mode) {
           controlMode = String(mode);
-          saveConfigToNVS();
+          if (!saveConfigToNVS()) { nvsSaved = false; ackStatus = "FAILED"; }
         }
         if (action && strcmp(action, "SET_AUTO") == 0) {
           controlMode = "AUTO";
-          saveConfigToNVS();
+          if (!saveConfigToNVS()) { nvsSaved = false; ackStatus = "FAILED"; }
           readSensors();
           ackMessage = "Quat thong gio da chuyen sang che do TU DONG";
         } else if (action && strcmp(action, "TURN_ON") == 0) {
@@ -882,110 +1045,102 @@ void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
       }
     }
   } else if (cmdType && strcmp(cmdType, "UPDATE_CONFIG") == 0) {
-    if (!payloadObj["sampling_interval_ms"].isNull()) {
-      unsigned long interval = payloadObj["sampling_interval_ms"].as<unsigned long>();
-      if (interval >= 1000) samplingIntervalMs = interval;
+    if (!validateConfig(payloadObj, ackMessage)) {
+      ackStatus = "FAILED";
+    } else {
+      if (!payloadObj["sampling_interval_ms"].isNull()) {
+        unsigned long interval = payloadObj["sampling_interval_ms"].as<unsigned long>();
+        if (interval >= 1000) samplingIntervalMs = interval;
+      }
+      if (!payloadObj["temp_warn_threshold"].isNull()) cfgTempWarn = payloadObj["temp_warn_threshold"].as<float>();
+      if (!payloadObj["temp_crit_threshold"].isNull()) cfgTempCrit = payloadObj["temp_crit_threshold"].as<float>();
+      if (!payloadObj["hum_warn_threshold"].isNull())  cfgHumWarn  = payloadObj["hum_warn_threshold"].as<float>();
+      if (!payloadObj["hum_crit_threshold"].isNull())  cfgHumCrit  = payloadObj["hum_crit_threshold"].as<float>();
+      if (!payloadObj["gas_warn_threshold"].isNull())  cfgGasWarn  = payloadObj["gas_warn_threshold"].as<float>();
+      if (!payloadObj["gas_crit_threshold"].isNull())  cfgGasCrit  = payloadObj["gas_crit_threshold"].as<float>();
+      if (!payloadObj["emc_warn_threshold"].isNull())  cfgEmcWarn  = payloadObj["emc_warn_threshold"].as<float>();
+      if (!payloadObj["emc_crit_threshold"].isNull())  cfgEmcCrit  = payloadObj["emc_crit_threshold"].as<float>();
+
+      bool restartI2c = false;
+      JsonObject periphObj = payloadObj["peripherals"];
+      if (!periphObj.isNull()) {
+        bool nextAht = periphObj["aht20_enabled"] | cfgAht20Enabled;
+        bool nextDoor = periphObj["door_enabled"] | cfgDoorEnabled;
+        bool nextFan = periphObj["fan_enabled"] | cfgFanEnabled;
+        bool nextBuzzer = periphObj["buzzer_enabled"] | cfgBuzzerEnabled;
+        uint8_t nextSda = periphObj["aht20_sda_gpio"] | cfgPinSda;
+        uint8_t nextScl = periphObj["aht20_scl_gpio"] | cfgPinScl;
+        uint8_t nextFanPin = periphObj["fan_gpio"] | cfgPinFan;
+        uint8_t nextBuzzerPin = periphObj["buzzer_gpio"] | cfgPinBuzzer;
+        uint8_t nextDoorPin = periphObj["door_gpio"] | cfgPinDoor;
+        if (cfgAht20Enabled && (!nextAht || nextSda != cfgPinSda || nextScl != cfgPinScl)) {
+          Wire.end(); pinMode(cfgPinSda, INPUT); pinMode(cfgPinScl, INPUT); hasRealAHT = false;
+        }
+        if (cfgFanEnabled && (!nextFan || nextFanPin != cfgPinFan)) {
+          setRelayPin(cfgPinFan, false); pinMode(cfgPinFan, INPUT);
+        }
+        if (cfgBuzzerEnabled && (!nextBuzzer || nextBuzzerPin != cfgPinBuzzer)) {
+          setRelayPin(cfgPinBuzzer, false); pinMode(cfgPinBuzzer, INPUT);
+        }
+        if (cfgDoorEnabled && (!nextDoor || nextDoorPin != cfgPinDoor)) pinMode(cfgPinDoor, INPUT);
+        restartI2c = nextAht && (!cfgAht20Enabled || nextSda != cfgPinSda || nextScl != cfgPinScl);
+        cfgPinSda = nextSda; cfgPinScl = nextScl;
+        cfgPinMq135 = periphObj["mq135_gpio"] | cfgPinMq135;
+        cfgPinDoor = nextDoorPin; cfgPinFan = nextFanPin; cfgPinBuzzer = nextBuzzerPin;
+
+        if (!periphObj["aht20_enabled"].isNull())  cfgAht20Enabled  = periphObj["aht20_enabled"].as<bool>();
+        if (!periphObj["mq135_enabled"].isNull())  cfgMq135Enabled  = periphObj["mq135_enabled"].as<bool>();
+        if (!periphObj["door_enabled"].isNull())   cfgDoorEnabled   = periphObj["door_enabled"].as<bool>();
+        if (!periphObj["fan_enabled"].isNull())    cfgFanEnabled    = periphObj["fan_enabled"].as<bool>();
+        if (!periphObj["buzzer_enabled"].isNull()) cfgBuzzerEnabled = periphObj["buzzer_enabled"].as<bool>();
+        if (!periphObj["buzzer_auto"].isNull()) {
+          bool prevBuzzerAuto = cfgBuzzerAuto;
+          cfgBuzzerAuto = periphObj["buzzer_auto"].as<bool>();
+          if (!prevBuzzerAuto && cfgBuzzerAuto) buzzerSilencedByUser = false;
+        }
+        if (!periphObj["fan_auto"].isNull()) {
+          controlMode = periphObj["fan_auto"].as<bool>() ? "AUTO" : "MANUAL";
+        }
+        if (!cfgFanEnabled) setFanRelay(false);
+        if (!cfgBuzzerEnabled) {
+          buzzerManualOverride = false;
+          buzzerSilencedByUser = false;
+          setBuzzerRelay(false);
+        }
+      }
+
+      if (payloadObj["custom_peripherals"].is<JsonArray>()) {
+        parseCustomPeripheralsArray(payloadObj["custom_peripherals"].as<JsonArray>(), true);
+      }
+
+      if (restartI2c) { Wire.begin(cfgPinSda, cfgPinScl); Wire.setClock(100000); Wire.setTimeOut(50); }
+      if (cfgFanEnabled) { pinMode(cfgPinFan, OUTPUT); setFanRelay(fanState); }
+      if (cfgBuzzerEnabled) { pinMode(cfgPinBuzzer, OUTPUT); setBuzzerRelay(buzzerState); }
+      if (cfgDoorEnabled) pinMode(cfgPinDoor, DOOR_PIN_MODE);
+      applyCustomPeripheralsHardware();
+      if (!saveConfigToNVS()) ackStatus = "FAILED";
+      if (ackStatus == "SUCCESS" && incomingRegistration.length() && (resuming || registrationId != incomingRegistration)) {
+        if (saveNodeLifecycle(incomingRegistration, false)) {
+          registrationId = incomingRegistration;
+          nodeOutputsInhibited = false;
+        } else {
+          inhibitAllOutputs();
+          ackStatus = "FAILED";
+        }
+      }
+      readSensors();
+      ackMessage = ackStatus == "SUCCESS" ? "Da cap nhat & luu NVS cau hinh module/nguong thanh cong" : "NVS save failed";
     }
-    if (!payloadObj["temp_warn_threshold"].isNull()) cfgTempWarn = payloadObj["temp_warn_threshold"].as<float>();
-    if (!payloadObj["temp_crit_threshold"].isNull()) cfgTempCrit = payloadObj["temp_crit_threshold"].as<float>();
-    if (!payloadObj["hum_warn_threshold"].isNull())  cfgHumWarn  = payloadObj["hum_warn_threshold"].as<float>();
-    if (!payloadObj["hum_crit_threshold"].isNull())  cfgHumCrit  = payloadObj["hum_crit_threshold"].as<float>();
-    if (!payloadObj["gas_warn_threshold"].isNull())  cfgGasWarn  = payloadObj["gas_warn_threshold"].as<float>();
-    if (!payloadObj["gas_crit_threshold"].isNull())  cfgGasCrit  = payloadObj["gas_crit_threshold"].as<float>();
-    if (!payloadObj["emc_warn_threshold"].isNull())  cfgEmcWarn  = payloadObj["emc_warn_threshold"].as<float>();
-    if (!payloadObj["emc_crit_threshold"].isNull())  cfgEmcCrit  = payloadObj["emc_crit_threshold"].as<float>();
-
-    JsonObject periphObj = payloadObj["peripherals"];
-    if (!periphObj.isNull()) {
-      uint8_t prevSda = cfgPinSda;
-      uint8_t prevScl = cfgPinScl;
-      uint8_t prevDoor = cfgPinDoor;
-      uint8_t prevFan = cfgPinFan;
-      uint8_t prevBuz = cfgPinBuzzer;
-
-      if (!periphObj["aht20_sda_gpio"].isNull()) {
-        uint8_t g = periphObj["aht20_sda_gpio"].as<uint8_t>();
-        if (isSafeBuiltinGpio(g, false, true)) cfgPinSda = g;
-      }
-      if (!periphObj["aht20_scl_gpio"].isNull()) {
-        uint8_t g = periphObj["aht20_scl_gpio"].as<uint8_t>();
-        if (isSafeBuiltinGpio(g, false, true)) cfgPinScl = g;
-      }
-      if (!periphObj["mq135_gpio"].isNull()) {
-        uint8_t g = periphObj["mq135_gpio"].as<uint8_t>();
-        if (isSafeBuiltinGpio(g, true, false)) cfgPinMq135 = g;
-      }
-      if (!periphObj["door_gpio"].isNull()) {
-        uint8_t g = periphObj["door_gpio"].as<uint8_t>();
-        if (isSafeBuiltinGpio(g, true, false)) cfgPinDoor = g;
-      }
-      if (!periphObj["fan_gpio"].isNull()) {
-        uint8_t g = periphObj["fan_gpio"].as<uint8_t>();
-        if (isSafeBuiltinGpio(g, false, false)) cfgPinFan = g;
-      }
-      if (!periphObj["buzzer_gpio"].isNull()) {
-        uint8_t g = periphObj["buzzer_gpio"].as<uint8_t>();
-        if (isSafeBuiltinGpio(g, false, false)) cfgPinBuzzer = g;
-      }
-
-      if (cfgPinSda != prevSda || cfgPinScl != prevScl) {
-        Wire.end();
-        Wire.begin(cfgPinSda, cfgPinScl);
-        Wire.setClock(100000);
-        Wire.setTimeOut(50);
-        hasRealAHT = false;
-      }
-      if (cfgPinDoor != prevDoor) {
-        pinMode(cfgPinDoor, DOOR_PIN_MODE);
-      }
-      if (cfgPinFan != prevFan) {
-        setRelayPin(prevFan, false);
-        pinMode(cfgPinFan, OUTPUT);
-        setFanRelay(fanState);
-      }
-      if (cfgPinBuzzer != prevBuz) {
-        setRelayPin(prevBuz, false);
-        pinMode(cfgPinBuzzer, OUTPUT);
-        setBuzzerRelay(buzzerState);
-      }
-
-      if (!periphObj["aht20_enabled"].isNull())  cfgAht20Enabled  = periphObj["aht20_enabled"].as<bool>();
-      if (!periphObj["mq135_enabled"].isNull())  cfgMq135Enabled  = periphObj["mq135_enabled"].as<bool>();
-      if (!periphObj["door_enabled"].isNull())   cfgDoorEnabled   = periphObj["door_enabled"].as<bool>();
-      if (!periphObj["fan_enabled"].isNull())    cfgFanEnabled    = periphObj["fan_enabled"].as<bool>();
-      if (!periphObj["buzzer_enabled"].isNull()) cfgBuzzerEnabled = periphObj["buzzer_enabled"].as<bool>();
-      if (!periphObj["buzzer_auto"].isNull()) {
-        bool prevBuzzerAuto = cfgBuzzerAuto;
-        cfgBuzzerAuto = periphObj["buzzer_auto"].as<bool>();
-        if (!prevBuzzerAuto && cfgBuzzerAuto) buzzerSilencedByUser = false;
-      }
-      if (!periphObj["fan_auto"].isNull()) {
-        controlMode = periphObj["fan_auto"].as<bool>() ? "AUTO" : "MANUAL";
-      }
-      if (!cfgFanEnabled) setFanRelay(false);
-      if (!cfgBuzzerEnabled) {
-        buzzerManualOverride = false;
-        buzzerSilencedByUser = false;
-        setBuzzerRelay(false);
-      }
-    }
-
-    if (payloadObj["custom_peripherals"].is<JsonArray>()) {
-      parseCustomPeripheralsArray(payloadObj["custom_peripherals"].as<JsonArray>(), true);
-    }
-
-    saveConfigToNVS();
-    readSensors();
-    sendTelemetry();
-    ackMessage = "Da cap nhat & luu NVS cau hinh module/nguong thanh cong";
+  } else {
+    ackStatus = "FAILED"; ackMessage = "Unsupported command type";
   }
 
-  // Tự động phản hồi bản tin xác nhận /ack sau 300ms
-  delay(300);
+  // ACK immediately after applying the command; no blocking delay.
 
   JsonDocument ackDoc;
   ackDoc["cmd_id"]      = cmdId ? cmdId : "cmd_unknown";
   ackDoc["device_id"]   = runtimeDeviceId;
+  ackDoc["registration_id"] = registrationId;
   ackDoc["status"]      = ackStatus;
   ackDoc["executed_at"] = millis();
 
@@ -994,7 +1149,8 @@ void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
   currentActs["buzzer_state"] = buzzerState ? "ON" : "OFF";
   currentActs["door_state"]   = isDoorOpen ? "OPEN" : "CLOSED";
   currentActs["control_mode"] = controlMode;
-  if (customPeripheralCount > 0) {
+  currentActs["outputs_inhibited"] = nodeOutputsInhibited;
+  {
     JsonObject cpStates = currentActs["custom_peripherals"].to<JsonObject>();
     for (int i = 0; i < customPeripheralCount; i++) {
       if (customPeripherals[i].type == "RELAY_OUTPUT") {
@@ -1003,11 +1159,16 @@ void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
     }
   }
 
+  if (!nvsSaved) ackMessage = "NVS save failed";
   ackDoc["message"] = ackMessage;
 
-  char ackBuffer[768];
+  String ackBuffer;
   serializeJson(ackDoc, ackBuffer);
-  mqttClient.publish(topicAck.c_str(), ackBuffer, false);
+  recentCommandIds[nextCommandCache] = cmdId;
+  recentCommandAcks[nextCommandCache] = ackBuffer;
+  nextCommandCache = (nextCommandCache + 1) % 8;
+  mqttClient.publish(topicAck.c_str(), ackBuffer.c_str(), false);
+  if (ackStatus == "SUCCESS") sendTelemetry();
 
   Serial.printf("📤 [MQTT ACK] Da gui phan hoi ACK: %s\n", ackMessage.c_str());
 }
@@ -1020,20 +1181,13 @@ void connectWiFi() {
 
   Serial.printf("📡 [Wi-Fi] Dang ket noi toi SSID: %s", WIFI_SSID);
   WiFi.mode(WIFI_STA);
+  static unsigned long lastAttempt = 0;
+  static bool attempted = false;
+  if (attempted && millis() - lastAttempt < 10000) return;
+  attempted = true; lastAttempt = millis();
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-  unsigned long startAttempt = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 10000) {
-    delay(500);
-    Serial.print(".");
-  }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("\n✅ [Wi-Fi] Ket noi thanh cong! IP: %s | RSSI: %d dBm\n",
-                  WiFi.localIP().toString().c_str(), WiFi.RSSI());
-  } else {
-    Serial.println("\n⚠️ [Wi-Fi] Chua the ket noi Wi-Fi, se thu lai ngam...");
-  }
 }
 
 void connectMQTT() {
@@ -1072,7 +1226,9 @@ void connectMQTT() {
 void setup() {
   Serial.begin(115200);
   delay(1000);
+  bootNonce = esp_random();
   initDeviceIdentity();
+  loadNodeLifecycle();
   loadConfigFromNVS();
 
   Serial.println("\n========================================================");
@@ -1087,49 +1243,53 @@ void setup() {
   Serial.println("========================================================");
 
   // 1. Cấu hình chân Relay 2 kênh và Cảm biến từ cửa
-  pinMode(cfgPinFan, OUTPUT);
-  pinMode(cfgPinBuzzer, OUTPUT);
-  pinMode(cfgPinDoor, DOOR_PIN_MODE);
+  if (cfgFanEnabled) pinMode(cfgPinFan, OUTPUT);
+  if (cfgBuzzerEnabled) pinMode(cfgPinBuzzer, OUTPUT);
+  if (cfgDoorEnabled) pinMode(cfgPinDoor, DOOR_PIN_MODE);
+  applyCustomPeripheralsHardware();
 
   // Trạng thái ban đầu: Tắt Quạt, Tắt Còi
   setFanRelay(false);
   setBuzzerRelay(false);
 
   // 2. Khởi tạo Bus I2C (mặc định SDA=21, SCL=22, 100kHz, timeout 50ms)
-  Wire.begin(cfgPinSda, cfgPinScl);
-  Wire.setClock(100000);
-  Wire.setTimeOut(50);
+  if (cfgAht20Enabled) {
+    Wire.begin(cfgPinSda, cfgPinScl);
+    Wire.setClock(100000);
+    Wire.setTimeOut(50);
 
-  // 3. Khởi tạo Cảm biến AHT20 (Địa chỉ mặc định 0x38, nguồn 3.3V)
-  uint8_t initProbeErr = probeI2CAddress(AHT20_I2C_ADDR);
-  if (initProbeErr == 0 && aht.begin(&Wire, 0, AHT20_I2C_ADDR)) {
-    hasRealAHT = true;
-    aht20Connected = true;
-    aht20Status = "OK";
-    aht20Message = "Ket noi I2C 0x38 on dinh";
-    lastAhtDiagnosticMsg = aht20Message;
-    Serial.println("✅ [Hardware] Cam bien nhiet am AHT20 san sang (I2C 0x38)!");
-  } else {
-    hasRealAHT = false;
-    aht20Connected = false;
-    if (initProbeErr == 0) {
-      aht20Status = "READ_ERROR";
-      char errBuf[140];
-      snprintf(errBuf, sizeof(errBuf),
-               "Thay dia chi 0x38 nhung khoi tao AHT20 that bai (status=0x%02X)", aht.getStatus());
-      aht20Message = String(errBuf);
+    // 3. Khởi tạo Cảm biến AHT20 (Địa chỉ mặc định 0x38, nguồn 3.3V)
+    uint8_t initProbeErr = probeI2CAddress(AHT20_I2C_ADDR);
+    if (initProbeErr == 0 && aht.begin(&Wire, 0, AHT20_I2C_ADDR)) {
+      hasRealAHT = true;
+      aht20Connected = true;
+      aht20Status = "OK";
+      aht20Message = "Ket noi I2C 0x38 on dinh";
+      lastAhtDiagnosticMsg = aht20Message;
+      Serial.println("✅ [Hardware] Cam bien nhiet am AHT20 san sang (I2C 0x38)!");
     } else {
-      aht20Status = ENABLE_SENSOR_SIMULATION_FALLBACK ? "SIMULATED" : "DISCONNECTED";
-      aht20Message = diagnoseAht20I2CBus(initProbeErr);
+      hasRealAHT = false;
+      aht20Connected = false;
+      if (initProbeErr == 0) {
+        aht20Status = "READ_ERROR";
+        char errBuf[140];
+        snprintf(errBuf, sizeof(errBuf),
+                 "Thay dia chi 0x38 nhung khoi tao AHT20 that bai (status=0x%02X)", aht.getStatus());
+        aht20Message = String(errBuf);
+      } else {
+        aht20Status = ENABLE_SENSOR_SIMULATION_FALLBACK ? "SIMULATED" : "DISCONNECTED";
+        aht20Message = diagnoseAht20I2CBus(initProbeErr);
+      }
+      lastAhtDiagnosticMsg = aht20Message;
+      Serial.printf("⚠️ [Hardware/AHT20] %s\n", aht20Message.c_str());
     }
-    lastAhtDiagnosticMsg = aht20Message;
-    Serial.printf("⚠️ [Hardware/AHT20] %s\n", aht20Message.c_str());
   }
 
-  // 4. Cấu hình MQTT Client (tăng buffer 2048 byte để chứa đủ sensor_health & custom_peripherals)
+  // 4. Buffer includes the full UTF-8 configuration, sensor health, and custom peripherals.
   mqttClient.setServer(MQTT_SERVER_IP, MQTT_SERVER_PORT);
   mqttClient.setCallback(handleIncomingCommand);
-  mqttClient.setBufferSize(2048);
+  mqttClient.setBufferSize(MQTT_BUFFER_BYTES);
+  mqttClient.setSocketTimeout(2);
 
   // 5. Kết nối Wi-Fi & MQTT
   connectWiFi();

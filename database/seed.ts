@@ -218,6 +218,15 @@ async function main() {
     gas_crit_threshold: 700.0,
     emc_warn_threshold: 14.0,
     emc_crit_threshold: 14.8,
+    peripherals: {
+      aht20_enabled: true,
+      mq135_enabled: false,
+      door_enabled: true,
+      fan_enabled: true,
+      fan_auto: true,
+      buzzer_enabled: true,
+      buzzer_auto: true,
+    },
   };
 
   const dev01 = await prisma.device.upsert({
