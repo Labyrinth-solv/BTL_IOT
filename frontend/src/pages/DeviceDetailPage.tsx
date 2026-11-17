@@ -488,6 +488,10 @@ export const DeviceDetailPage: React.FC = () => {
   const currentFanState = wsData
     ? wsData.fan_state === 'ON'
     : latestLog?.fan_state ?? false;
+  const currentFanMode =
+    wsData?.control_mode ??
+    device.control_mode ??
+    (peripherals.fan_auto !== false ? 'AUTO' : 'MANUAL');
   const currentBuzzerState = wsData ? wsData.buzzer_state === 'ON' : false;
   const runtimeCustomList: CustomPeripheralRuntimeState[] =
     wsData?.custom_peripherals ?? device.custom_peripherals ?? [];
@@ -573,7 +577,10 @@ export const DeviceDetailPage: React.FC = () => {
               }`}
             >
               <Fan className={`w-4 h-4 ${currentFanState ? 'animate-spin' : ''}`} />
-              <span>Quạt: {currentFanState ? 'Đang bật' : 'Đang tắt'}</span>
+              <span>
+                Quạt: {currentFanState ? 'Đang bật' : 'Đang tắt'} (
+                {currentFanMode === 'MANUAL' ? 'Thủ công' : 'Tự động'})
+              </span>
             </button>
           )}
 
@@ -684,7 +691,62 @@ export const DeviceDetailPage: React.FC = () => {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {attachedPeripherals.map((item) => (
+            {attachedPeripherals.map((item) => {
+              let connLabel = 'Mạch ngoại tuyến';
+              let connClass = 'bg-slate-100 text-slate-600 border-slate-200';
+              let connNote: string | undefined;
+
+              if (!device.is_online) {
+                connLabel = 'Mạch ngoại tuyến';
+                connClass = 'bg-slate-100 text-slate-600 border-slate-200';
+                connNote = 'ESP32 đang mất kết nối mạng.';
+              } else if (item.id === 'aht20') {
+                const aht = sensorHealth?.aht20;
+                if (!aht) {
+                  connLabel = 'Đang chờ dữ liệu';
+                } else if (aht.ok && aht.status === 'SIMULATED') {
+                  connLabel = 'Mô phỏng';
+                  connClass = 'bg-amber-50 text-amber-700 border-amber-200';
+                } else if (aht.ok) {
+                  connLabel = 'Đang kết nối';
+                  connClass = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                } else {
+                  connLabel = aht.status === 'READ_ERROR' ? 'Lỗi đọc dữ liệu' : 'Mất kết nối';
+                  connClass = 'bg-rose-50 text-rose-700 border-rose-200';
+                  connNote = aht.message;
+                }
+              } else if (item.id === 'mq135') {
+                const mq = sensorHealth?.mq135;
+                if (!mq) {
+                  connLabel = 'Đang chờ dữ liệu';
+                } else if (mq.ok && mq.status === 'SIMULATED') {
+                  connLabel = 'Mô phỏng';
+                  connClass = 'bg-amber-50 text-amber-700 border-amber-200';
+                } else if (mq.ok) {
+                  connLabel = 'Đang kết nối';
+                  connClass = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                } else {
+                  connLabel = mq.status === 'OUT_OF_RANGE' ? 'Vượt ngưỡng ADC' : 'Mất kết nối';
+                  connClass = 'bg-rose-50 text-rose-700 border-rose-200';
+                  connNote = mq.message;
+                }
+              } else if (item.id === 'door') {
+                connLabel = 'Digital 1-bit';
+                connClass = 'bg-sky-50 text-sky-700 border-sky-200';
+                connNote =
+                  typeof doorOpen === 'boolean'
+                    ? `Hiện tại: ${doorOpen ? 'Đang mở' : 'Đang đóng'} (không tự báo rút dây)`
+                    : 'Không tự phát hiện rút dây';
+              } else {
+                connLabel = 'Mạch trực tuyến';
+                connClass = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                connNote =
+                  item.id === 'fan'
+                    ? `Chế độ: ${currentFanMode === 'MANUAL' ? 'Thủ công' : 'Tự động'} · Không hồi tiếp dây`
+                    : 'Relay ngõ ra · Không hồi tiếp dây';
+              }
+
+              return (
               <div
                 key={item.id}
                 className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between gap-3"
@@ -699,9 +761,23 @@ export const DeviceDetailPage: React.FC = () => {
                         <Cpu className="w-3 h-3 text-emerald-600" />
                         {getPeripheralPinLabel(item.id, peripherals)}
                       </span>
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${connClass}`}
+                      >
+                        {connLabel}
+                      </span>
                     </div>
                     <div className="text-xs font-bold text-slate-900 mt-1">{item.name}</div>
                     <div className="text-[11px] text-slate-500 mt-1">{item.description}</div>
+                    {connNote && (
+                      <div
+                        className={`text-[11px] mt-1 ${
+                          connClass.includes('rose') ? 'text-rose-600 font-medium' : 'text-slate-500'
+                        }`}
+                      >
+                        {connNote}
+                      </div>
+                    )}
                   </div>
 
                   {isAdmin && (
@@ -730,13 +806,36 @@ export const DeviceDetailPage: React.FC = () => {
                   </label>
                 )}
               </div>
-            ))}
+              );
+            })}
 
             {/* Các thiết bị ngoại vi TẠO MỚI (Custom GPIO Peripherals) */}
             {customPeripherals.map((cp) => {
               const live = runtimeCustomList.find((r) => r.id === cp.id);
               const isRelayOn = live?.state === 'ON' || live?.value === 1;
               const isDigitalActive = live?.state === 'ACTIVE' || live?.value === 1;
+
+              let cpConnLabel = 'Mạch ngoại tuyến';
+              let cpConnClass = 'bg-slate-100 text-slate-600 border-slate-200';
+              if (!device.is_online) {
+                cpConnLabel = 'Mạch ngoại tuyến';
+                cpConnClass = 'bg-slate-100 text-slate-600 border-slate-200';
+              } else if (cp.type === 'RELAY_OUTPUT') {
+                cpConnLabel = 'Mạch trực tuyến';
+                cpConnClass = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+              } else if (!live) {
+                cpConnLabel = 'Chờ dữ liệu';
+                cpConnClass = 'bg-slate-100 text-slate-600 border-slate-200';
+              } else if (cp.type === 'ANALOG_INPUT' && live.raw_adc !== undefined && live.raw_adc < 25) {
+                cpConnLabel = `Tín hiệu thấp (ADC ${live.raw_adc})`;
+                cpConnClass = 'bg-amber-50 text-amber-700 border-amber-200';
+              } else if (cp.type === 'DIGITAL_INPUT') {
+                cpConnLabel = 'Digital 1-bit';
+                cpConnClass = 'bg-sky-50 text-sky-700 border-sky-200';
+              } else {
+                cpConnLabel = 'Đang kết nối';
+                cpConnClass = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+              }
 
               return (
                 <div
@@ -752,6 +851,11 @@ export const DeviceDetailPage: React.FC = () => {
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-sky-200 text-sky-800 text-[10px] font-semibold">
                           <Cpu className="w-3 h-3 text-sky-600" />
                           GPIO {cp.gpio}
+                        </span>
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${cpConnClass}`}
+                        >
+                          {cpConnLabel}
                         </span>
                       </div>
                       <div className="text-xs font-bold text-slate-900 mt-1 flex items-center gap-1.5">

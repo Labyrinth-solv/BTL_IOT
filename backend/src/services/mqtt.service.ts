@@ -334,7 +334,11 @@ export class MQTTService {
       mq135_ok: mq135Ok,
     });
 
-    const isFanOn = fanEnabled && (actuators?.fan_state === 'ON' || (fanAuto && ruleResult.should_turn_on_fan));
+    const isFanOn =
+      fanEnabled &&
+      (actuators?.fan_state !== undefined
+        ? actuators.fan_state === 'ON'
+        : fanAuto && ruleResult.should_turn_on_fan);
 
     // F. Lưu vào bảng telemetry_logs
     const telemetryRecord = await prisma.telemetryLog.create({
@@ -438,7 +442,9 @@ export class MQTTService {
 
     const isBuzzerOn =
       buzzerEnabled &&
-      (actuators?.buzzer_state === 'ON' || (buzzerAuto && ruleResult.risk_level === 'HIGH_RISK'));
+      (actuators?.buzzer_state !== undefined
+        ? actuators.buzzer_state === 'ON'
+        : buzzerAuto && ruleResult.risk_level === 'HIGH_RISK');
 
     // J. Đẩy dữ liệu thời gian thực qua WebSocket lên Dashboard
     SocketService.emitTelemetry({

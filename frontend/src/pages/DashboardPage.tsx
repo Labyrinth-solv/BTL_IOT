@@ -332,6 +332,10 @@ export const DashboardPage: React.FC = () => {
               const buzzerPending = pendingCommands[`${device.device_code}:ALARM_BUZZER`];
 
               const periph = normalizePeripherals((device.config_json as any)?.peripherals);
+              const fanMode =
+                wsData?.control_mode ??
+                device.control_mode ??
+                (periph.fan_auto !== false ? 'AUTO' : 'MANUAL');
               const ahtEnabled = periph.aht20_enabled && wsData?.sensor_health?.aht20?.status !== 'DISABLED';
               const mqEnabled = periph.mq135_enabled && wsData?.sensor_health?.mq135?.status !== 'DISABLED';
               const fanEnabled = periph.fan_enabled;
@@ -783,6 +787,9 @@ export const DashboardPage: React.FC = () => {
                               <span>Quạt:</span>
                               <span className={fanActive ? 'text-amber-700 font-bold' : 'text-slate-500'}>
                                 {fanPending ? 'Đang gửi...' : fanActive ? 'Đang bật' : 'Đang tắt'}
+                              </span>
+                              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">
+                                {fanMode === 'MANUAL' ? 'Thủ công' : 'Tự động'}
                               </span>
                             </div>
                           </div>

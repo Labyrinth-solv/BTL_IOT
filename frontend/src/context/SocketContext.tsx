@@ -129,6 +129,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               ...existing,
               fan_state: ackData.current_actuators.fan_state ?? existing.fan_state,
               buzzer_state: ackData.current_actuators.buzzer_state ?? existing.buzzer_state,
+              control_mode: ackData.current_actuators.control_mode ?? existing.control_mode,
               custom_peripherals: updatedCustom,
             },
           };

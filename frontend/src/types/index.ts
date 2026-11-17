@@ -141,6 +141,7 @@ export interface Device {
   telemetry_logs?: TelemetryLog[];
   sensor_health?: SensorHealth | null;
   door_open?: boolean | null;
+  control_mode?: string | null;
   custom_peripherals?: CustomPeripheralRuntimeState[];
   ip_address?: string | null;
   mac_address?: string | null;

@@ -59,7 +59,8 @@ int lastDoorRawLogic = HIGH;
 // Trạng thái cơ cấu chấp hành (Relay 2 kênh) và cảm biến từ cửa
 bool fanState = false;            // Kênh 1 (IN1): false = OFF, true = ON
 bool buzzerState = false;         // Kênh 2 (IN2): false = OFF, true = ON
-bool buzzerManualOverride = false;// Cho phép bật/tắt còi thủ công để test từ Web
+bool buzzerManualOverride = false;// Cho phép bật còi thủ công để test từ Web
+bool buzzerSilencedByUser = false;// Cho phép tắt còi thủ công khi đang HIGH_RISK cho tới khi hết ngưỡng nguy hiểm
 bool isDoorOpen = false;          // false = Cửa đóng, true = Cửa mở
 String controlMode = "AUTO";      // "AUTO" hoặc "MANUAL"
 String currentRiskLevel = "SAFE"; // "SAFE", "WARNING", "HIGH_RISK"
@@ -589,10 +590,16 @@ void readSensors() {
   // Cảnh báo Còi (Relay Kênh 2 - IN2)
   if (!cfgBuzzerEnabled) {
     buzzerManualOverride = false;
+    buzzerSilencedByUser = false;
     setBuzzerRelay(false);
-  } else if (cfgBuzzerAuto && currentRiskLevel == "HIGH_RISK") {
+  } else if (buzzerManualOverride) {
     setBuzzerRelay(true);
-  } else if (!buzzerManualOverride) {
+  } else if (cfgBuzzerAuto && currentRiskLevel == "HIGH_RISK" && !buzzerSilencedByUser) {
+    setBuzzerRelay(true);
+  } else {
+    if (currentRiskLevel != "HIGH_RISK") {
+      buzzerSilencedByUser = false;
+    }
     setBuzzerRelay(false);
   }
 
@@ -828,17 +835,22 @@ void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
     else if (strcmp(target, "ALARM_BUZZER") == 0) {
       if (!cfgBuzzerEnabled) {
         buzzerManualOverride = false;
+        buzzerSilencedByUser = false;
         setBuzzerRelay(false);
         ackStatus = "FAILED";
         ackMessage = "Coi bao dong (Relay K2) dang bi tat trong cau hinh module";
       } else if (action && strcmp(action, "TURN_ON") == 0) {
         buzzerManualOverride = true;
+        buzzerSilencedByUser = false;
         setBuzzerRelay(true);
         ackMessage = "Relay K2 GPIO " + String(cfgPinBuzzer) + " activated (Coi bao dong BAT)";
       } else if (action && strcmp(action, "TURN_OFF") == 0) {
         buzzerManualOverride = false;
+        buzzerSilencedByUser = (currentRiskLevel == "HIGH_RISK");
         setBuzzerRelay(false);
-        ackMessage = "Relay K2 GPIO " + String(cfgPinBuzzer) + " deactivated (Coi bao dong TAT)";
+        ackMessage = buzzerSilencedByUser
+          ? ("Relay K2 GPIO " + String(cfgPinBuzzer) + " muted (Da tat coi thu cong trong dot canh bao)")
+          : ("Relay K2 GPIO " + String(cfgPinBuzzer) + " deactivated (Coi bao dong TAT)");
       }
     }
     // 3. Điều khiển Ngoại vi tùy chọn (Relay ngõ ra thêm từ Web)
@@ -937,13 +949,17 @@ void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
       if (!periphObj["door_enabled"].isNull())   cfgDoorEnabled   = periphObj["door_enabled"].as<bool>();
       if (!periphObj["fan_enabled"].isNull())    cfgFanEnabled    = periphObj["fan_enabled"].as<bool>();
       if (!periphObj["buzzer_enabled"].isNull()) cfgBuzzerEnabled = periphObj["buzzer_enabled"].as<bool>();
-      if (!periphObj["buzzer_auto"].isNull())    cfgBuzzerAuto    = periphObj["buzzer_auto"].as<bool>();
+      if (!periphObj["buzzer_auto"].isNull()) {
+        cfgBuzzerAuto = periphObj["buzzer_auto"].as<bool>();
+        if (cfgBuzzerAuto) buzzerSilencedByUser = false;
+      }
       if (!periphObj["fan_auto"].isNull()) {
         controlMode = periphObj["fan_auto"].as<bool>() ? "AUTO" : "MANUAL";
       }
       if (!cfgFanEnabled) setFanRelay(false);
       if (!cfgBuzzerEnabled) {
         buzzerManualOverride = false;
+        buzzerSilencedByUser = false;
         setBuzzerRelay(false);
       }
     }
