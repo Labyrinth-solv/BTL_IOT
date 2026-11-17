@@ -443,10 +443,60 @@ export const DeviceDetailPage: React.FC = () => {
         ...(isFan ? { control_mode: 'MANUAL' } : {}),
       });
       if (res.success) {
+        if (isFan) {
+          setPeripherals((prev) => ({ ...prev, fan_auto: false }));
+          setDevice((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  control_mode: 'MANUAL',
+                  config_json: {
+                    ...(prev.config_json || {}),
+                    peripherals: {
+                      ...((prev.config_json as any)?.peripherals || {}),
+                      fan_auto: false,
+                    },
+                  },
+                }
+              : prev
+          );
+        }
         showToast(`Đã gửi lệnh ${action === 'TURN_ON' ? 'BẬT' : 'TẮT'} ${label}.`, 'warning');
       }
     } catch (err: any) {
       showToast(err.message || `Lỗi gửi lệnh điều khiển ${label}`, 'error');
+    }
+  };
+
+  const handleSwitchFanAuto = async () => {
+    if (!device || isViewer) return;
+    try {
+      const res = await api.controlActuator(device.id, {
+        target: 'VENTILATION_FAN',
+        action: 'SET_AUTO',
+        control_mode: 'AUTO',
+      });
+      if (res.success) {
+        setPeripherals((prev) => ({ ...prev, fan_auto: true }));
+        setDevice((prev) =>
+          prev
+            ? {
+                ...prev,
+                control_mode: 'AUTO',
+                config_json: {
+                  ...(prev.config_json || {}),
+                  peripherals: {
+                    ...((prev.config_json as any)?.peripherals || {}),
+                    fan_auto: true,
+                  },
+                },
+              }
+            : prev
+        );
+        showToast('Đã chuyển quạt thông gió sang chế độ Tự động.', 'success');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Không chuyển được quạt về chế độ tự động', 'error');
     }
   };
 
@@ -536,6 +586,7 @@ export const DeviceDetailPage: React.FC = () => {
         const action = payload?.action === 'TURN_ON' ? 'Bật' : 'Tắt';
         return `${action} ${match ? match.name : 'thiết bị'}`;
       }
+      if (payload?.action === 'SET_AUTO') return 'Chuyển quạt sang Tự động';
       const target = payload?.target === 'ALARM_BUZZER' ? 'còi' : 'quạt';
       const action = payload?.action === 'TURN_ON' ? 'Bật' : 'Tắt';
       return `${action} ${target}`;
@@ -576,26 +627,38 @@ export const DeviceDetailPage: React.FC = () => {
 
         <div className="flex flex-wrap items-center gap-2.5">
           {fanEnabled && (
-            <button
-              onClick={() => handleControlActuator('VENTILATION_FAN', currentFanState)}
-              disabled={!isOnline || isViewer}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
-                !isOnline || isViewer
-                  ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                  : currentFanState
-                  ? 'bg-amber-500 text-white border-amber-500 shadow-sm cursor-pointer'
-                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 cursor-pointer'
-              }`}
-            >
-              <Fan className={`w-4 h-4 ${isOnline && currentFanState ? 'animate-spin' : ''}`} />
-              <span>
-                {!isOnline
-                  ? 'Quạt: Ngoại tuyến'
-                  : `Quạt: ${currentFanState ? 'Đang bật' : 'Đang tắt'} (${
-                      currentFanMode === 'MANUAL' ? 'Thủ công' : 'Tự động'
-                    })`}
-              </span>
-            </button>
+            <>
+              <button
+                onClick={() => handleControlActuator('VENTILATION_FAN', currentFanState)}
+                disabled={!isOnline || isViewer}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
+                  !isOnline || isViewer
+                    ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                    : currentFanState
+                    ? 'bg-amber-500 text-white border-amber-500 shadow-sm cursor-pointer'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 cursor-pointer'
+                }`}
+              >
+                <Fan className={`w-4 h-4 ${isOnline && currentFanState ? 'animate-spin' : ''}`} />
+                <span>
+                  {!isOnline
+                    ? 'Quạt: Ngoại tuyến'
+                    : `Quạt: ${currentFanState ? 'Đang bật' : 'Đang tắt'} (${
+                        currentFanMode === 'MANUAL' ? 'Thủ công' : 'Tự động'
+                      })`}
+                </span>
+              </button>
+
+              {isOnline && currentFanMode === 'MANUAL' && !isViewer && (
+                <button
+                  type="button"
+                  onClick={handleSwitchFanAuto}
+                  className="px-3 py-2 rounded-xl text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition cursor-pointer"
+                >
+                  Bật Tự động
+                </button>
+              )}
+            </>
           )}
 
           {buzzerEnabled && (

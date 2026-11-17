@@ -822,7 +822,12 @@ void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
           controlMode = String(mode);
           saveConfigToNVS();
         }
-        if (action && strcmp(action, "TURN_ON") == 0) {
+        if (action && strcmp(action, "SET_AUTO") == 0) {
+          controlMode = "AUTO";
+          saveConfigToNVS();
+          readSensors();
+          ackMessage = "Quat thong gio da chuyen sang che do TU DONG";
+        } else if (action && strcmp(action, "TURN_ON") == 0) {
           setFanRelay(true);
           ackMessage = "Relay K1 GPIO " + String(cfgPinFan) + " activated (Quat thong gio BAT)";
         } else if (action && strcmp(action, "TURN_OFF") == 0) {
@@ -950,8 +955,9 @@ void handleIncomingCommand(char* topic, byte* payload, unsigned int length) {
       if (!periphObj["fan_enabled"].isNull())    cfgFanEnabled    = periphObj["fan_enabled"].as<bool>();
       if (!periphObj["buzzer_enabled"].isNull()) cfgBuzzerEnabled = periphObj["buzzer_enabled"].as<bool>();
       if (!periphObj["buzzer_auto"].isNull()) {
+        bool prevBuzzerAuto = cfgBuzzerAuto;
         cfgBuzzerAuto = periphObj["buzzer_auto"].as<bool>();
-        if (cfgBuzzerAuto) buzzerSilencedByUser = false;
+        if (!prevBuzzerAuto && cfgBuzzerAuto) buzzerSilencedByUser = false;
       }
       if (!periphObj["fan_auto"].isNull()) {
         controlMode = periphObj["fan_auto"].as<bool>() ? "AUTO" : "MANUAL";

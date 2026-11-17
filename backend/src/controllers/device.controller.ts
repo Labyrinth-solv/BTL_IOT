@@ -756,6 +756,9 @@ export class DeviceController {
         } else if (command === 'TURN_OFF_BUZZER' || command === 'BUZZER_OFF') {
           resolvedTarget = 'ALARM_BUZZER';
           resolvedAction = 'TURN_OFF';
+        } else if (command === 'FAN_AUTO' || command === 'SET_FAN_AUTO') {
+          resolvedTarget = 'VENTILATION_FAN';
+          resolvedAction = 'SET_AUTO';
         }
       }
 
@@ -804,7 +807,34 @@ export class DeviceController {
 
       const resolvedControlMode =
         control_mode ||
-        (resolvedTarget === 'ALARM_BUZZER' || resolvedTarget === 'CUSTOM_PERIPHERAL' ? undefined : 'MANUAL');
+        (resolvedTarget === 'VENTILATION_FAN' && resolvedAction === 'SET_AUTO'
+          ? 'AUTO'
+          : resolvedTarget === 'ALARM_BUZZER' || resolvedTarget === 'CUSTOM_PERIPHERAL'
+          ? undefined
+          : 'MANUAL');
+
+      if (resolvedTarget === 'VENTILATION_FAN' && (resolvedControlMode === 'MANUAL' || resolvedControlMode === 'AUTO')) {
+        const prevConfig =
+          typeof device.config_json === 'object' && device.config_json !== null
+            ? (device.config_json as Record<string, any>)
+            : {};
+        const prevPeripherals =
+          typeof prevConfig.peripherals === 'object' && prevConfig.peripherals !== null
+            ? prevConfig.peripherals
+            : {};
+        await prisma.device.update({
+          where: { id: device.id },
+          data: {
+            config_json: {
+              ...prevConfig,
+              peripherals: {
+                ...prevPeripherals,
+                fan_auto: resolvedControlMode === 'AUTO',
+              },
+            },
+          },
+        });
+      }
 
       // Phát lệnh xuống topic grain/devices/{device_code}/cmd
       const cmdId = await MQTTService.publishCommand(

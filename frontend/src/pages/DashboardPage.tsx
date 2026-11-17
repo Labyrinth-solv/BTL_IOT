@@ -97,6 +97,12 @@ export const DashboardPage: React.FC = () => {
             `${pending.label || 'Thiết bị'} đã ${pending.targetState === 'ON' ? 'BẬT' : 'TẮT'}`,
             'success'
           );
+        } else if (pending.targetState === 'AUTO') {
+          const fanState = ack.current_actuators?.fan_state;
+          showToast(
+            `Quạt thông gió đã bật Tự động (${fanState === 'ON' ? 'Đang bật' : 'Đang tắt'})`,
+            'success'
+          );
         } else {
           const fanState = ack.current_actuators?.fan_state;
           showToast(
@@ -159,12 +165,33 @@ export const DashboardPage: React.FC = () => {
         ...(isFan ? { control_mode: 'MANUAL' } : {}),
       });
 
-      if (res.success && res.data?.cmd_id) {
-        setPendingCommands((prev) =>
-          prev[pendingKey]
-            ? { ...prev, [pendingKey]: { ...prev[pendingKey], cmdId: res.data.cmd_id } }
-            : prev
-        );
+      if (res.success) {
+        if (isFan) {
+          setDevices((prev) =>
+            prev.map((d) =>
+              d.id === device.id
+                ? {
+                    ...d,
+                    control_mode: 'MANUAL',
+                    config_json: {
+                      ...(d.config_json || {}),
+                      peripherals: {
+                        ...((d.config_json as any)?.peripherals || {}),
+                        fan_auto: false,
+                      },
+                    },
+                  }
+                : d
+            )
+          );
+        }
+        if (res.data?.cmd_id) {
+          setPendingCommands((prev) =>
+            prev[pendingKey]
+              ? { ...prev, [pendingKey]: { ...prev[pendingKey], cmdId: res.data.cmd_id } }
+              : prev
+          );
+        }
       }
     } catch (err: any) {
       setPendingCommands((prev) => {
@@ -173,6 +200,63 @@ export const DashboardPage: React.FC = () => {
         return copy;
       });
       showToast(err.message || `Không gửi được lệnh điều khiển ${label}`, 'error');
+    }
+  };
+
+  const handleSwitchFanAuto = async (device: Device) => {
+    if (isViewer) {
+      showToast('Vai trò Giám sát QC chỉ có quyền xem, không thể điều khiển.', 'error');
+      return;
+    }
+    const pendingKey = `${device.device_code}:VENTILATION_FAN`;
+    setPendingCommands((prev) => ({
+      ...prev,
+      [pendingKey]: {
+        target: 'VENTILATION_FAN',
+        label: 'quạt thông gió',
+        targetState: 'AUTO',
+        timestamp: Date.now(),
+      },
+    }));
+    try {
+      const res = await api.controlActuator(device.id, {
+        target: 'VENTILATION_FAN',
+        action: 'SET_AUTO',
+        control_mode: 'AUTO',
+      });
+      if (res.success) {
+        setDevices((prev) =>
+          prev.map((d) =>
+            d.id === device.id
+              ? {
+                  ...d,
+                  control_mode: 'AUTO',
+                  config_json: {
+                    ...(d.config_json || {}),
+                    peripherals: {
+                      ...((d.config_json as any)?.peripherals || {}),
+                      fan_auto: true,
+                    },
+                  },
+                }
+              : d
+          )
+        );
+        if (res.data?.cmd_id) {
+          setPendingCommands((prev) =>
+            prev[pendingKey]
+              ? { ...prev, [pendingKey]: { ...prev[pendingKey], cmdId: res.data.cmd_id } }
+              : prev
+          );
+        }
+      }
+    } catch (err: any) {
+      setPendingCommands((prev) => {
+        const copy = { ...prev };
+        delete copy[pendingKey];
+        return copy;
+      });
+      showToast(err.message || 'Không chuyển được quạt về chế độ tự động', 'error');
     }
   };
 
@@ -841,9 +925,21 @@ export const DashboardPage: React.FC = () => {
                               <span className={fanActive ? 'text-amber-700 font-bold' : 'text-slate-500'}>
                                 {fanPending ? 'Đang gửi...' : fanActive ? 'Đang bật' : 'Đang tắt'}
                               </span>
-                              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">
-                                {fanMode === 'MANUAL' ? 'Thủ công' : 'Tự động'}
-                              </span>
+                              {fanMode === 'MANUAL' && !isViewer ? (
+                                <button
+                                  type="button"
+                                  disabled={Boolean(fanPending)}
+                                  onClick={() => handleSwitchFanAuto(device)}
+                                  title="Bấm để chuyển quạt về chế độ Tự động"
+                                  className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 border border-slate-200 hover:border-emerald-200 transition cursor-pointer"
+                                >
+                                  Thủ công &middot; Bật Tự động
+                                </button>
+                              ) : (
+                                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">
+                                  {fanMode === 'MANUAL' ? 'Thủ công' : 'Tự động'}
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>
